@@ -2,7 +2,7 @@
 
 # ================= 配置区域 =================
 # 1. GitHub 模板 RAW 地址
-TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/6fb07448c86ea075b11476ea4b5685612b320d33/clash_template.yaml"
+TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
 
 # 2. 安装脚本的信息文件路径
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
@@ -45,6 +45,7 @@ def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
+        # 1. JSON format
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
         return f"""- name: "{data.get('ps', 'Imported-VMess')}"
@@ -64,6 +65,7 @@ def parse_vmess(link):
       Host: {data.get('host', '') or data.get('sni', '')}
 """
     except:
+        # 2. URL Params format
         try:
             if "?" in b64_body: b64, query = b64_body.split("?", 1)
             else: b64, query = b64_body, ""
@@ -130,9 +132,7 @@ if [[ "$add_sub" == "y" || "$add_sub" == "Y" ]]; then
     if [[ -n "$sub_url" ]]; then
         # 使用 sed 整行替换 (c命令)，避免特殊字符干扰
         # 匹配包含 "这里填写机场订阅地址" 的行，替换为新的 url 行 (带4空格缩进)
-        # 使用 | 作为分隔符以兼容 url 中的 /
         sed -i "/这里填写机场订阅地址/c\    url: \"$sub_url\"" template.tmp
-        
         echo -e "${GREEN}✅ 订阅链接已更新。${PLAIN}"
     else
         echo -e "${RED}❌ 链接为空，跳过。${PLAIN}"
@@ -140,7 +140,6 @@ if [[ "$add_sub" == "y" || "$add_sub" == "Y" ]]; then
 else
     echo -e "${CYAN}ℹ️  跳过订阅设置，保留默认占位符。${PLAIN}"
 fi
-
 
 # --- 步骤 2: 动态生成自动节点 ---
 echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
@@ -253,68 +252,4 @@ extract_names() {
     if [ -f "$file" ]; then
         grep -E "^[[:space:]]*-[[:space:]]*name:" "$file" | \
         sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
-        while read -r name; do echo "      - \"$name\""; done
-    fi
-}
-
-echo -e "${BLUE}⚙️  [合并] 正在整合所有节点信息...${PLAIN}"
-
-# 准备自动节点 (加2格缩进)
-if [ -s "$AUTO_NODES_TEMP" ]; then
-    sed 's/^/  /' "$AUTO_NODES_TEMP" > auto_content.tmp
-    extract_names "$AUTO_NODES_TEMP" > auto_names.tmp
-else
-    touch auto_content.tmp auto_names.tmp
-fi
-
-# 准备手动节点 (加2格缩进)
-if [ -s "$MANUAL_NODES_FILE" ]; then
-    sed 's/^/  /' "$MANUAL_NODES_FILE" > manual_content.tmp
-    extract_names "$MANUAL_NODES_FILE" > manual_names.tmp
-else
-    touch manual_content.tmp manual_names.tmp
-fi
-
-# 合并名字
-cat auto_names.tmp manual_names.tmp > all_names.tmp
-
-if [ ! -s all_names.tmp ]; then
-    echo -e "${RED}❌ 错误：没有有效的节点信息 (自动为空且无手动节点)。${PLAIN}"
-    rm *.tmp vmess_parser.py
-    exit 1
-fi
-
-# 替换生成
-awk '
-    BEGIN {
-        while ((getline line < "auto_content.tmp") > 0) auto_c = auto_c line "\n"
-        while ((getline line < "manual_content.tmp") > 0) manual_c = manual_c line "\n"
-        while ((getline line < "all_names.tmp") > 0) names_c = names_c line "\n"
-    }
-    /#VAR_AUTO_NODES#/ { printf "%s", auto_c; next }
-    /#VAR_MANUAL_NODES#/ { printf "%s", manual_c; next }
-    /#VAR_ALL_NODE_NAMES#/ { printf "%s", names_c; next }
-    { print }
-' template.tmp > "$OUTPUT_FILE"
-
-# 最终清理
-rm *.tmp vmess_parser.py
-
-# --- 5. 结果展示 ---
-echo "========================================"
-echo -e "${GREEN}✅ 配置文件已生成: $OUTPUT_FILE ${PLAIN}"
-echo -e "${CYAN}📊 当前包含的节点列表:${PLAIN}"
-grep -E "^[[:space:]]*-[[:space:]]*name:" "$OUTPUT_FILE" | \
-sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
-while read -r name; do echo -e "  ⭐ ${YELLOW}$name${PLAIN}"; done
-
-echo "========================================"
-echo -e "${GREEN}⬇️  下载方式 1 (Transfer.sh - 推荐):${PLAIN}"
-echo -e "   ${CYAN}curl --upload-file $OUTPUT_FILE https://transfer.sh/clash_final.yaml${PLAIN}"
-echo ""
-echo -e "${GREEN}👀 查看方式 2 (直接打印内容):${PLAIN}"
-echo -e "   (复制下方内容，保存为 config.yaml 即可)"
-echo ""
-echo -e "${YELLOW}📄 --- 文件内容开始 ---${PLAIN}"
-cat "$OUTPUT_FILE"
-echo -e "${YELLOW}📄 --- 文件内容结束 ---${PLAIN}"
+        while read -r name; do echo "

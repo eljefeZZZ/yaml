@@ -19,7 +19,7 @@ PORT_TLS=8443
 # ===========================================
 
 echo "⬇️  正在下载配置模板..."
-curl -s -o template.tmp "$TEMPLATE_URL"
+curl -s -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)"
 if [ $? -ne 0 ]; then echo "❌ 下载失败"; exit 1; fi
 
 # --- 步骤 1: 动态生成自动节点信息 ---

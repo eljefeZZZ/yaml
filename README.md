@@ -43,7 +43,6 @@
 请连接到你的 VPS（推荐 Debian 10+/Ubuntu 20+），执行以下命令：
 
 ```
-bash
 wget -O setup.sh https://github.com/eljefeZZZ/v2ray/raw/refs/heads/main/setup.sh && sed -i 's/\r$//' setup.sh && chmod +x setup.sh && ./setup.sh
 ```
 
@@ -63,7 +62,6 @@ wget -O setup.sh https://github.com/eljefeZZZ/v2ray/raw/refs/heads/main/setup.sh
 🚀 运行生成命令
 
 ```
-bash
 bash <(curl -sL https://raw.githubusercontent.com/eljefeZZZ/yaml/main/gen_config.sh)
 ```
 

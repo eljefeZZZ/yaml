@@ -1,6 +1,16 @@
 🚀 ElJefe-V2 & Clash Config Auto-Generator
-[![V2Ray](https://img.shields.io/badge/Project-V2Ray-blue?style=flat-
-[
+<p align="center">
+  <a href="https://www.v2fly.org/">
+    <img src="https://img.shields.io/badge/Project-V2Ray-blue?style=flat-square&logo=v2ray&logoColor=white" alt="V2Ray">
+  </a>
+  <a href="https://github.com/MetaCubeX/mihomo">
+    <img src="https://img.shields.io/badge/Config-Clash%20Meta-green?style=flat-square&logo=clash&logoColor=white" alt="Clash Meta">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License">
+  </a>
+</p>
+
 
 一键部署 V2Ray 服务端 + 一键生成 Clash 客户端配置
 

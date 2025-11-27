@@ -2,7 +2,7 @@
 
 # ================= 配置区域 =================
 # 1. GitHub 模板 RAW 地址
-TEMPLATE_URL="https://gist.githubusercontent.com/yourname/xxxx/raw/clash_template_pro.yaml"
+TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/6fb07448c86ea075b11476ea4b5685612b320d33/clash_template.yaml"
 
 # 2. 安装脚本的信息文件路径
 INFO_FILE="/usr/local/eljefe-v2/info.txt"

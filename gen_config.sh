@@ -7,7 +7,7 @@ TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e
 # 2. 安装脚本的信息文件路径
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
 
-# 3. 手动维护的节点文件路径 (这个文件会永久保留，除非手动删)
+# 3. 手动维护的节点文件路径
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 
 # 4. 输出文件
@@ -29,7 +29,6 @@ PLAIN='\033[0m'
 # --- 0. 初始化与清理 ---
 echo -e "${BLUE}🧹 [系统] 正在清理旧文件...${PLAIN}"
 rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
-# 注意：不删除 MANUAL_NODES_FILE，方便你保留之前的自定义节点
 
 # --- 1. 环境检查与 Python 解析器准备 ---
 if ! command -v python3 &> /dev/null; then
@@ -46,7 +45,6 @@ def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
-        # 1. JSON format
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
         return f"""- name: "{data.get('ps', 'Imported-VMess')}"
@@ -66,7 +64,6 @@ def parse_vmess(link):
       Host: {data.get('host', '') or data.get('sni', '')}
 """
     except:
-        # 2. URL Params format
         try:
             if "?" in b64_body: b64, query = b64_body.split("?", 1)
             else: b64, query = b64_body, ""
@@ -124,6 +121,25 @@ if ! grep -q "proxies:" template.tmp; then
     exit 1
 fi
 
+# --- 步骤 1.5: 询问并替换机场订阅 ---
+echo "========================================"
+read -p "❓ 是否添加机场订阅链接？[y/n]: " add_sub
+if [[ "$add_sub" == "y" || "$add_sub" == "Y" ]]; then
+    echo -e "${YELLOW}请粘贴订阅地址 (http/https开头):${PLAIN}"
+    read -r sub_url
+    if [[ -n "$sub_url" ]]; then
+        # 使用 sed 替换模板中的默认占位符文本
+        # 注意：使用 # 作为定界符以避免 URL 中的 / 冲突
+        sed -i "s#url: \"这里填写机场订阅地址\"#url: \"$sub_url\"#g" template.tmp
+        echo -e "${GREEN}✅ 订阅链接已更新。${PLAIN}"
+    else
+        echo -e "${RED}❌ 链接为空，跳过。${PLAIN}"
+    fi
+else
+    echo -e "${CYAN}ℹ️  跳过订阅设置，保留默认占位符。${PLAIN}"
+fi
+
+
 # --- 步骤 2: 动态生成自动节点 ---
 echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
 AUTO_NODES_TEMP="auto_nodes_generated.tmp"
@@ -135,6 +151,7 @@ else
     source "$INFO_FILE"
     IP=$(curl -s https://api.ipify.org)
     
+    # 修复重点：client-fingerprint 与 reality-opts 同级，不缩进
     cat <<EOF >> "$AUTO_NODES_TEMP"
 - name: ElJefe_Reality
   type: vless
@@ -149,7 +166,7 @@ else
   reality-opts:
     public-key: $PUB_KEY
     short-id: "$SID"
-    client-fingerprint: chrome
+  client-fingerprint: chrome
 
 EOF
     if [[ -n "$DOMAIN" ]]; then
@@ -193,7 +210,6 @@ fi
 
 # --- 步骤 3: 交互式添加手动节点 ---
 echo "========================================"
-# 检查是否已有手动节点
 if [ -s "$MANUAL_NODES_FILE" ]; then
     NODE_COUNT=$(grep -c "name:" "$MANUAL_NODES_FILE")
     echo -e "${CYAN}ℹ️  发现已有 $NODE_COUNT 个手动保存的节点。${PLAIN}"
@@ -241,7 +257,7 @@ extract_names() {
 
 echo -e "${BLUE}⚙️  [合并] 正在整合所有节点信息...${PLAIN}"
 
-# 准备自动节点
+# 准备自动节点 (加2格缩进)
 if [ -s "$AUTO_NODES_TEMP" ]; then
     sed 's/^/  /' "$AUTO_NODES_TEMP" > auto_content.tmp
     extract_names "$AUTO_NODES_TEMP" > auto_names.tmp
@@ -249,7 +265,7 @@ else
     touch auto_content.tmp auto_names.tmp
 fi
 
-# 准备手动节点
+# 准备手动节点 (加2格缩进)
 if [ -s "$MANUAL_NODES_FILE" ]; then
     sed 's/^/  /' "$MANUAL_NODES_FILE" > manual_content.tmp
     extract_names "$MANUAL_NODES_FILE" > manual_names.tmp

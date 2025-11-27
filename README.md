@@ -6,11 +6,7 @@
   <a href="https://github.com/MetaCubeX/mihomo">
     <img src="https://img.shields.io/badge/Config-Clash%20Meta-green?style=flat-square&logo=clash&logoColor=white" alt="Clash Meta">
   </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT-orange?style=flat-square" alt="License">
-  </a>
 </p>
-
 
 一键部署 V2Ray 服务端 + 一键生成 Clash 客户端配置
 

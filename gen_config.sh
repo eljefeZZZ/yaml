@@ -128,9 +128,11 @@ if [[ "$add_sub" == "y" || "$add_sub" == "Y" ]]; then
     echo -e "${YELLOW}请粘贴订阅地址 (http/https开头):${PLAIN}"
     read -r sub_url
     if [[ -n "$sub_url" ]]; then
-        # 使用 sed 替换模板中的默认占位符文本
-        # 注意：使用 # 作为定界符以避免 URL 中的 / 冲突
-        sed -i "s#url: \"这里填写机场订阅地址\"#url: \"$sub_url\"#g" template.tmp
+        # 使用 sed 整行替换 (c命令)，避免特殊字符干扰
+        # 匹配包含 "这里填写机场订阅地址" 的行，替换为新的 url 行 (带4空格缩进)
+        # 使用 | 作为分隔符以兼容 url 中的 /
+        sed -i "/这里填写机场订阅地址/c\    url: \"$sub_url\"" template.tmp
+        
         echo -e "${GREEN}✅ 订阅链接已更新。${PLAIN}"
     else
         echo -e "${RED}❌ 链接为空，跳过。${PLAIN}"

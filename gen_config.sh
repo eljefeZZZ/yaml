@@ -7,7 +7,7 @@ TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e
 # 2. 安装脚本的信息文件路径
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
 
-# 3. 手动维护的节点文件路径
+# 3. 手动维护的节点文件路径 (这个文件会永久保留，除非手动删)
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 
 # 4. 输出文件
@@ -16,11 +16,24 @@ OUTPUT_FILE="/root/clash_final.yaml"
 # 5. 端口定义
 PORT_REALITY=443
 PORT_TLS=8443
+
+# --- 颜色定义 ---
+GREEN='\033[32m'
+YELLOW='\033[33m'
+BLUE='\033[34m'
+RED='\033[31m'
+CYAN='\033[36m'
+PLAIN='\033[0m'
 # ===========================================
 
-# --- 0. 环境检查与 Python 解析器准备 ---
+# --- 0. 初始化与清理 ---
+echo -e "${BLUE}🧹 [系统] 正在清理旧文件...${PLAIN}"
+rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
+# 注意：不删除 MANUAL_NODES_FILE，方便你保留之前的自定义节点
+
+# --- 1. 环境检查与 Python 解析器准备 ---
 if ! command -v python3 &> /dev/null; then
-    echo "⚠️ 未检测到 Python3，将无法使用链接转换功能 (但自动生成仍可用)。"
+    echo -e "${YELLOW}⚠️ 未检测到 Python3，链接转换功能不可用。${PLAIN}"
 fi
 
 cat << 'EOF' > vmess_parser.py
@@ -30,12 +43,10 @@ import json
 import urllib.parse
 
 def parse_vmess(link):
-    if not link.startswith("vmess://"):
-        return None
-    
+    if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
-        # 1. 尝试标准 JSON 格式
+        # 1. JSON format
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
         return f"""- name: "{data.get('ps', 'Imported-VMess')}"
@@ -55,30 +66,22 @@ def parse_vmess(link):
       Host: {data.get('host', '') or data.get('sni', '')}
 """
     except:
-        # 2. 尝试 URL 参数格式
+        # 2. URL Params format
         try:
-            if "?" in b64_body:
-                b64_part, query_part = b64_body.split("?", 1)
-            else:
-                b64_part, query_part = b64_body, ""
-            
-            missing_padding = len(b64_part) % 4
-            if missing_padding:
-                b64_part += '=' * (4 - missing_padding)
-                
-            decoded_base = base64.b64decode(b64_part).decode('utf-8')
-            user_info, host_info = decoded_base.split('@')
-            uuid = user_info.split(':')[1]
+            if "?" in b64_body: b64, query = b64_body.split("?", 1)
+            else: b64, query = b64_body, ""
+            pad = len(b64)%4; 
+            if pad: b64 += '='*(4-pad)
+            decoded = base64.b64decode(b64).decode('utf-8')
+            user, host_info = decoded.split('@')
+            uuid = user.split(':')[1]
             server, port = host_info.split(':')
-            
-            params = dict(urllib.parse.parse_qsl(query_part))
+            params = dict(urllib.parse.parse_qsl(query))
             
             name = params.get('remarks', 'Imported-VMess')
-            network = params.get('obfs', 'tcp')
-            if network == 'websocket': network = 'ws'
-            
-            tls = 'true' if params.get('tls') == '1' else 'false'
-            path = params.get('path', '/')
+            net = params.get('obfs', 'tcp'); 
+            if net == 'websocket': net = 'ws'
+            tls = 'true' if params.get('tls')=='1' else 'false'
             host = params.get('obfsParam') or params.get('peer') or server
             
             return f"""- name: "{name}"
@@ -90,15 +93,14 @@ def parse_vmess(link):
   cipher: auto
   udp: true
   tls: {tls}
-  network: {network}
+  network: {net}
   servername: {host}
   ws-opts:
-    path: {path}
+    path: {params.get('path', '/')}
     headers:
       Host: {host}
 """
-        except Exception as e:
-            return None
+        except: return None
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -107,20 +109,32 @@ if __name__ == "__main__":
         else: sys.exit(1)
 EOF
 
-echo "⬇️  正在下载配置模板..."
+echo -e "${BLUE}⬇️  [网络] 正在下载配置模板...${PLAIN}"
 curl -s -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)"
-if [ $? -ne 0 ]; then echo "❌ 下载失败"; exit 1; fi
 
-# --- 步骤 1: 动态生成自动节点 ---
-echo "🔍 读取本机自动节点信息..."
+# 检查下载结果
+if grep -q "404: Not Found" template.tmp || grep -q "404 Not Found" template.tmp; then
+    echo -e "${RED}❌ 错误：模板 URL 无效 (404)。请检查脚本中的 TEMPLATE_URL。${PLAIN}"
+    rm template.tmp vmess_parser.py
+    exit 1
+fi
+if ! grep -q "proxies:" template.tmp; then
+    echo -e "${RED}❌ 错误：下载的文件不是有效的 YAML 模板。${PLAIN}"
+    rm template.tmp vmess_parser.py
+    exit 1
+fi
+
+# --- 步骤 2: 动态生成自动节点 ---
+echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
+AUTO_NODES_TEMP="auto_nodes_generated.tmp"
+echo "" > "$AUTO_NODES_TEMP"
+
 if [ ! -f "$INFO_FILE" ]; then
-    echo "⚠️ 未找到本机 V2Ray 信息，跳过自动生成。"
+    echo -e "${YELLOW}⚠️  未找到本机 V2Ray 信息文件，跳过自动生成。${PLAIN}"
 else
     source "$INFO_FILE"
     IP=$(curl -s https://api.ipify.org)
-    AUTO_NODES_TEMP="auto_nodes_generated.tmp"
-    echo "" > "$AUTO_NODES_TEMP"
-
+    
     cat <<EOF >> "$AUTO_NODES_TEMP"
 - name: ElJefe_Reality
   type: vless
@@ -138,7 +152,6 @@ else
     client-fingerprint: chrome
 
 EOF
-
     if [[ -n "$DOMAIN" ]]; then
         cat <<EOF >> "$AUTO_NODES_TEMP"
 - name: ElJefe_VLESS_CDN
@@ -178,74 +191,82 @@ EOF
     fi
 fi
 
-# --- 步骤 2: 交互式添加手动节点 ---
+# --- 步骤 3: 交互式添加手动节点 ---
 echo "========================================"
-read -p "❓ 是否要添加手动节点链接(vmess://)? [y/n]: " add_manual
+# 检查是否已有手动节点
+if [ -s "$MANUAL_NODES_FILE" ]; then
+    NODE_COUNT=$(grep -c "name:" "$MANUAL_NODES_FILE")
+    echo -e "${CYAN}ℹ️  发现已有 $NODE_COUNT 个手动保存的节点。${PLAIN}"
+    read -p "❓ 是否【清空】旧的手动节点？(y=清空 / n=保留) [y/n]: " clean_manual
+    if [[ "$clean_manual" == "y" || "$clean_manual" == "Y" ]]; then
+        echo "" > "$MANUAL_NODES_FILE"
+        echo -e "${GREEN}🗑️  旧节点已清空。${PLAIN}"
+    else
+        echo -e "${GREEN}👌 旧节点已保留。${PLAIN}"
+    fi
+fi
+
+read -p "❓ 是否要【添加】新的 vmess:// 链接? [y/n]: " add_manual
 if [[ "$add_manual" == "y" || "$add_manual" == "Y" ]]; then
     while true; do
-        echo "请粘贴 vmess:// 链接 (按 Ctrl+C 退出，直接回车结束添加):"
+        echo -e "${YELLOW}请粘贴链接 (Ctrl+C 退出，直接回车结束):${PLAIN}"
         read -r vmess_link
         if [[ -z "$vmess_link" ]]; then break; fi
         
-        echo "🔄 正在解析..."
+        echo "🔄 解析中..."
         PARSED_YAML=$(python3 vmess_parser.py "$vmess_link")
         
         if [[ $? -eq 0 && -n "$PARSED_YAML" ]]; then
             NODE_NAME=$(echo "$PARSED_YAML" | grep "name:" | head -1 | cut -d'"' -f2)
-            echo "✅ 成功识别: $NODE_NAME"
-            if [ ! -f "$MANUAL_NODES_FILE" ]; then touch "$MANUAL_NODES_FILE"; fi
+            echo -e "${GREEN}✅ 成功识别: $NODE_NAME${PLAIN}"
+            [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
             echo "$PARSED_YAML" >> "$MANUAL_NODES_FILE"
             echo "" >> "$MANUAL_NODES_FILE"
-            echo "📥 已添加。"
         else
-            echo "❌ 解析失败。"
+            echo -e "${RED}❌ 解析失败，链接格式错误。${PLAIN}"
         fi
         echo "----------------------------------------"
-        echo "还有吗？(直接回车结束)"
     done
 fi
 
-# --- 步骤 3: 提取名称与合并 ---
+# --- 步骤 4: 整合与生成 ---
 extract_names() {
     local file=$1
     if [ -f "$file" ]; then
         grep -E "^[[:space:]]*-[[:space:]]*name:" "$file" | \
         sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
-        while read -r name; do
-            echo "      - \"$name\""
-        done
+        while read -r name; do echo "      - \"$name\""; done
     fi
 }
 
-echo "📄 正在整合所有节点..."
+echo -e "${BLUE}⚙️  [合并] 正在整合所有节点信息...${PLAIN}"
 
-if [ -f "$AUTO_NODES_TEMP" ] && [ -s "$AUTO_NODES_TEMP" ]; then
+# 准备自动节点
+if [ -s "$AUTO_NODES_TEMP" ]; then
     sed 's/^/  /' "$AUTO_NODES_TEMP" > auto_content.tmp
     extract_names "$AUTO_NODES_TEMP" > auto_names.tmp
 else
-    echo "" > auto_content.tmp
-    echo "" > auto_names.tmp
+    touch auto_content.tmp auto_names.tmp
 fi
 
-if [ -f "$MANUAL_NODES_FILE" ] && [ -s "$MANUAL_NODES_FILE" ]; then
+# 准备手动节点
+if [ -s "$MANUAL_NODES_FILE" ]; then
     sed 's/^/  /' "$MANUAL_NODES_FILE" > manual_content.tmp
     extract_names "$MANUAL_NODES_FILE" > manual_names.tmp
 else
-    echo "" > manual_content.tmp
-    echo "" > manual_names.tmp
+    touch manual_content.tmp manual_names.tmp
 fi
 
+# 合并名字
 cat auto_names.tmp manual_names.tmp > all_names.tmp
 
 if [ ! -s all_names.tmp ]; then
-    echo "❌ 错误：没有有效的节点信息。"
+    echo -e "${RED}❌ 错误：没有有效的节点信息 (自动为空且无手动节点)。${PLAIN}"
     rm *.tmp vmess_parser.py
     exit 1
 fi
 
-# --- 步骤 4: 最终生成 ---
-echo "⚙️  正在生成最终配置文件..."
-
+# 替换生成
 awk '
     BEGIN {
         while ((getline line < "auto_content.tmp") > 0) auto_c = auto_c line "\n"
@@ -258,19 +279,24 @@ awk '
     { print }
 ' template.tmp > "$OUTPUT_FILE"
 
+# 最终清理
 rm *.tmp vmess_parser.py
 
+# --- 5. 结果展示 ---
 echo "========================================"
-echo "✅ 配置文件已生成: $OUTPUT_FILE"
-echo "📊 当前包含节点:"
-grep -E "^[[:space:]]*-[[:space:]]*name:" "$OUTPUT_FILE" | sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | sed 's/^/  ⭐ /'
+echo -e "${GREEN}✅ 配置文件已生成: $OUTPUT_FILE ${PLAIN}"
+echo -e "${CYAN}📊 当前包含的节点列表:${PLAIN}"
+grep -E "^[[:space:]]*-[[:space:]]*name:" "$OUTPUT_FILE" | \
+sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
+while read -r name; do echo -e "  ⭐ ${YELLOW}$name${PLAIN}"; done
+
 echo "========================================"
-echo "⬇️  下载方式 1 (Transfer.sh):"
-echo "   curl --upload-file $OUTPUT_FILE https://transfer.sh/clash_final.yaml"
+echo -e "${GREEN}⬇️  下载方式 1 (Transfer.sh - 推荐):${PLAIN}"
+echo -e "   ${CYAN}curl --upload-file $OUTPUT_FILE https://transfer.sh/clash_final.yaml${PLAIN}"
 echo ""
-echo "👀 查看方式 2 (直接复制):"
-echo "   (下方将直接显示文件内容，请从 --- 开始复制)"
+echo -e "${GREEN}👀 查看方式 2 (直接打印内容):${PLAIN}"
+echo -e "   (复制下方内容，保存为 config.yaml 即可)"
 echo ""
-echo "📄 --- 文件内容开始 ---"
+echo -e "${YELLOW}📄 --- 文件内容开始 ---${PLAIN}"
 cat "$OUTPUT_FILE"
-echo "📄 --- 文件内容结束 ---"
+echo -e "${YELLOW}📄 --- 文件内容结束 ---${PLAIN}"

@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.0 持久化订阅版)
+# Clash 配置管理神器 (v13.1 像素级对齐版)
 # ==============================================================
 
 # --- 全局配置 ---
 TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
-AIRPORT_URLS_FILE="/root/airport_urls.txt"  # 新增：持久化存储订阅
+AIRPORT_URLS_FILE="/root/airport_urls.txt"
 OUTPUT_FILE="/root/clash_final.yaml"
 PORT_REALITY=443
 PORT_TLS=8443
@@ -30,7 +30,7 @@ function print_success() { echo -e "${GREEN}✔  $1${PLAIN}"; }
 function print_error() { echo -e "${RED}✖  $1${PLAIN}"; }
 
 # ===========================================
-# 核心功能模块
+# 核心功能模块 (封装)
 # ===========================================
 
 function init_env() {
@@ -38,7 +38,6 @@ function init_env() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告: 未检测到 Python3${PLAIN}"
     fi
-    # Python 解析器 (顶格输出)
     cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 def parse_vmess(link):
@@ -89,34 +88,29 @@ function run_generator() {
     init_env
     download_template
 
-    # --- 机场订阅处理 (升级版: 文件读取 + 交互) ---
     print_title "📡 机场订阅处理"
     providers_yaml=""
     group_use_yaml=""
     count=0
 
-    # 1. 先读取已保存的订阅文件
     if [ -f "$AIRPORT_URLS_FILE" ]; then
         while read -r saved_url; do
             [[ -z "$saved_url" ]] && continue
             count=$((count+1))
             p_name="Airport_${count}"
-            echo -e "${GREEN}   ✔ 加载保存的订阅: ${p_name}${PLAIN}"
+            echo -e "${GREEN}   ✔ 加载订阅: ${p_name}${PLAIN}"
             providers_yaml="${providers_yaml}  ${p_name}:\n    type: http\n    url: \"${saved_url}\"\n    path: ./proxies/airport_${count}.yaml\n    interval: 86400\n    health-check:\n      enable: true\n      interval: 600\n      url: http://www.gstatic.com/generate_204\n\n"
             group_use_yaml="${group_use_yaml}      - ${p_name}\n"
         done < "$AIRPORT_URLS_FILE"
     fi
 
-    # 2. 询问是否临时添加更多
     while true; do
         if [ $count -eq 0 ]; then 
-            read -p "$(echo -e "${YELLOW}❓ 未找到订阅，是否立即添加？[y/n]: ${PLAIN}")" add_sub
+            read -p "$(echo -e "${YELLOW}❓ 未找到订阅，添加？[y/n]: ${PLAIN}")" add_sub
         else 
-            read -p "$(echo -e "${YELLOW}❓ 是否添加临时订阅 (不保存)？[y/n]: ${PLAIN}")" add_sub
+            read -p "$(echo -e "${YELLOW}❓ 添加临时订阅？[y/n]: ${PLAIN}")" add_sub
         fi
-        
         [[ "$add_sub" != "y" && "$add_sub" != "Y" ]] && break
-
         echo -e "${GREEN}➜ 粘贴地址:${PLAIN}"
         read -r sub_url
         if [[ -n "$sub_url" ]]; then
@@ -135,7 +129,6 @@ function run_generator() {
         sed -i "/^    use:/a\\${group_use_yaml}" template.tmp
     fi
 
-    # --- 本机节点 ---
     print_title "🏠 本机节点生成"
     AUTO_NODES_TEMP="auto_nodes.tmp"
     echo "" > "$AUTO_NODES_TEMP"
@@ -199,19 +192,15 @@ EOF
         echo -e "${YELLOW}⚠️  未找到本机配置${PLAIN}"
     fi
 
-    # --- 手动节点 ---
     print_title "🛠️  手动节点处理"
     MANUAL_NODES_TEMP="manual_nodes.tmp"
     echo "" > "$MANUAL_NODES_TEMP"
-
     if [ -s "$MANUAL_NODES_FILE" ]; then
         COUNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
         echo -e "${CYAN}ℹ️  正在处理 ${COUNT} 个手动节点...${PLAIN}"
-        
         while read -r line; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^#.*$ ]] && continue
-            
             if [[ "$line" == vmess://* ]]; then
                 RESULT=$(python3 vmess_parser.py "$line")
                 [[ -n "$RESULT" ]] && echo "$RESULT" >> "$MANUAL_NODES_TEMP" && echo "" >> "$MANUAL_NODES_TEMP"
@@ -224,7 +213,6 @@ EOF
         echo -e "${CYAN}ℹ️  无手动节点${PLAIN}"
     fi
 
-    # --- 拼接 ---
     print_step "正在写入文件..."
     NODE_NAMES=""
     for temp_file in "$AUTO_NODES_TEMP" "$MANUAL_NODES_TEMP"; do
@@ -240,10 +228,8 @@ EOF
 
     [[ -s "$AUTO_NODES_TEMP" ]] && sed -i '/#VAR_AUTO_NODES#/r auto_nodes.tmp' template.tmp
     sed -i '/#VAR_AUTO_NODES#/d' template.tmp
-
     [[ -s "$MANUAL_NODES_TEMP" ]] && sed -i '/#VAR_MANUAL_NODES#/r manual_nodes.tmp' template.tmp
     sed -i '/#VAR_MANUAL_NODES#/d' template.tmp
-
     if [[ -n "$NODE_NAMES" ]]; then
         echo -e "$NODE_NAMES" > node_names.tmp
         sed -i '/#VAR_ALL_NODE_NAMES#/r node_names.tmp' template.tmp
@@ -262,18 +248,18 @@ EOF
 }
 
 # ===========================================
-# 菜单功能函数
+# 菜单功能
 # ===========================================
 
 function menu_add_airport() {
     echo ""
     print_title "✈️  添加机场订阅"
-    echo -e "${GREEN}➜ 请粘贴订阅地址 (http...):${PLAIN}"
+    echo -e "${GREEN}➜ 粘贴地址 (http...):${PLAIN}"
     read -r link
     if [[ -n "$link" ]]; then
-        if [ ! -f "$AIRPORT_URLS_FILE" ]; then touch "$AIRPORT_URLS_FILE"; fi
+        [ ! -f "$AIRPORT_URLS_FILE" ] && touch "$AIRPORT_URLS_FILE"
         echo "$link" >> "$AIRPORT_URLS_FILE"
-        print_success "订阅已保存到列表，请运行 [1] 重新生成以生效。"
+        print_success "订阅已保存，运行 [1] 生效。"
     else
         print_error "输入为空"
     fi
@@ -282,12 +268,12 @@ function menu_add_airport() {
 function menu_add_manual() {
     echo ""
     print_title "➕ 添加手动节点"
-    echo -e "${GREEN}➜ 请粘贴链接 (vmess://...):${PLAIN}"
+    echo -e "${GREEN}➜ 粘贴链接 (vmess://...):${PLAIN}"
     read -r link
     if [[ -n "$link" ]]; then
-        if [ ! -f "$MANUAL_NODES_FILE" ]; then touch "$MANUAL_NODES_FILE"; fi
+        [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
         echo "$link" >> "$MANUAL_NODES_FILE"
-        print_success "节点已保存到列表，请运行 [1] 重新生成以生效。"
+        print_success "节点已保存，运行 [1] 生效。"
     else
         print_error "输入为空"
     fi
@@ -295,30 +281,24 @@ function menu_add_manual() {
 
 function menu_clear_data() {
     echo ""
-    echo -e "${YELLOW}请选择要清空的数据类型:${PLAIN}"
-    echo -e " 1. 清空所有 ${RED}手动节点${PLAIN}"
-    echo -e " 2. 清空所有 ${RED}机场订阅${PLAIN}"
+    echo -e "${YELLOW}请选择要清空的数据:${PLAIN}"
+    echo -e " 1. 清空手动节点"
+    echo -e " 2. 清空机场订阅"
     echo -e " 0. 取消"
-    read -p "请输入选项: " sub_choice
+    read -p "请输入: " sub_choice
     case "$sub_choice" in
-        1)
-            echo "" > "$MANUAL_NODES_FILE"
-            print_success "手动节点已清空。"
-            ;;
-        2)
-            echo "" > "$AIRPORT_URLS_FILE"
-            print_success "机场订阅已清空。"
-            ;;
-        *) echo "取消操作" ;;
+        1) echo "" > "$MANUAL_NODES_FILE"; print_success "手动节点已清空。";;
+        2) echo "" > "$AIRPORT_URLS_FILE"; print_success "机场订阅已清空。";;
+        *) echo "取消" ;;
     esac
 }
 
 function menu_reset_all() {
     echo ""
-    read -p "$(echo -e "${RED}⚠️  警告: 将删除所有配置文件、订阅、节点记录。确定？[y/n]: ${PLAIN}")" confirm
+    read -p "$(echo -e "${RED}⚠️  删除所有配置？[y/n]: ${PLAIN}")" confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
         rm -f "$OUTPUT_FILE" "$MANUAL_NODES_FILE" "$AIRPORT_URLS_FILE"
-        print_success "所有数据已清除 (重置为初始状态)。"
+        print_success "已重置。"
         exit 0
     fi
 }
@@ -326,22 +306,26 @@ function menu_reset_all() {
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.0${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.1${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
-    # 计数统计
-    AIR_CNT=0
-    MAN_CNT=0
+    # 计数
+    AIR_CNT=0; MAN_CNT=0
     [ -f "$AIRPORT_URLS_FILE" ] && AIR_CNT=$(grep -cve '^\s*$' "$AIRPORT_URLS_FILE")
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
-    echo -e "${GREEN} 1.${PLAIN} 🔄 重新生成配置 (加载以下所有数据)"
-    echo -e "${GREEN} 2.${PLAIN} ✈️  添加机场订阅 [当前: ${YELLOW}${AIR_CNT}${PLAIN}]"
-    echo -e "${GREEN} 3.${PLAIN} ➕ 添加手动节点 [当前: ${YELLOW}${MAN_CNT}${PLAIN}]"
-    echo -e "${GREEN} 4.${PLAIN} 🗑️  清空数据 (节点/订阅)"
-    echo -e "${GREEN} 5.${PLAIN} 📄 查看配置文件"
-    echo -e "${RED} 6.${PLAIN} 🧹 重置所有数据 (删库)"
-    echo -e "${GREEN} 0.${PLAIN} 🚪 退出"
+    # [对齐] 使用 printf 格式化输出
+    # %-3s: 左对齐数字
+    # %-1s: 图标占位
+    # %s: 文字内容
+    
+    printf "${GREEN} 1.${PLAIN} %-1s %s\n" "🔄" "重新生成配置 (加载所有数据)"
+    printf "${GREEN} 2.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️ " "添加机场订阅" "$AIR_CNT"
+    printf "${GREEN} 3.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
+    printf "${GREEN} 4.${PLAIN} %-1s %s\n" "🗑️ " "清空数据 (节点/订阅)"
+    printf "${GREEN} 5.${PLAIN} %-1s %s\n" "📄" "查看配置文件"
+    printf "${RED} 6.${PLAIN} %-1s %s\n" "🧹" "重置所有数据 (删库)"
+    printf "${GREEN} 0.${PLAIN} %-1s %s\n" "🚪" "退出"
     
     echo -e "${PURPLE}==============================================${PLAIN}"
     echo -e " 📂 输出路径: ${CYAN}${OUTPUT_FILE}${PLAIN}"
@@ -361,35 +345,11 @@ function show_menu() {
 }
 
 # ===========================================
-# 主程序
+# 主入口
 # ===========================================
 
-# 首次运行引导
 if [ ! -f "$OUTPUT_FILE" ]; then
     clear
     print_title "🚀 欢迎使用 Clash 配置向导 (首次运行)"
-    
-    # 引导添加机场
-    read -p "$(echo -e "${YELLOW}❓ 是否现在添加一个机场订阅？[y/n]: ${PLAIN}")" first_air
-    if [[ "$first_air" == "y" || "$first_air" == "Y" ]]; then
-        echo -e "${GREEN}➜ 粘贴地址:${PLAIN}"
-        read -r link
-        [[ -n "$link" ]] && echo "$link" >> "$AIRPORT_URLS_FILE"
-    fi
-
-    # 引导添加节点
-    read -p "$(echo -e "${YELLOW}❓ 是否现在添加一个手动节点？[y/n]: ${PLAIN}")" first_node
-    if [[ "$first_node" == "y" || "$first_node" == "Y" ]]; then
-        echo -e "${GREEN}➜ 粘贴链接:${PLAIN}"
-        read -r link
-        [[ -n "$link" ]] && echo "$link" >> "$MANUAL_NODES_FILE"
-    fi
-    
-    run_generator
-    
-    echo -e "\n${CYAN}👉 提示: 再次运行此脚本即可进入管理维护面板。${PLAIN}"
-else
-    while true; do
-        show_menu
-    done
-fi
+    if [ ! -f "$AIRPORT_URLS_FILE" ]; then touch "$AIRPORT_URLS_FILE"; fi
+    read -p "$(

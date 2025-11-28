@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置生成脚本 (v7.0 原版复刻 + 多机场增强)
+# Clash 配置生成脚本 (v8.0 手动节点修复版)
 # ==============================================================
 
 # 1. 基础配置
@@ -26,25 +26,49 @@ PLAIN='\033[0m'
 rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
 
 if ! command -v python3 &> /dev/null; then
-    echo -e "${YELLOW}⚠️ 未检测到 Python3${PLAIN}"
+    echo -e "${YELLOW}⚠️ 未检测到 Python3，手动节点转换可能失败${PLAIN}"
 fi
 
-# [Python脚本] 生成标准 YAML 列表项 (无额外缩进，由调用方控制)
+# [Python脚本] 增强健壮性，确保输出
 cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
+        # 尝试标准 Base64 解码
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
-        # 返回标准格式
+        # 顶格输出，缩进由 shell 脚本控制或者保持顶格
         return f"""- name: "{data.get('ps', 'Imported-VMess')}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
-    except: return None
+    except:
+        try:
+            # 尝试兼容 QuanX/Shadowrocket 格式
+            if "?" in b64_body: b64, query = b64_body.split("?", 1)
+            else: b64, query = b64_body, ""
+            pad = len(b64)%4; 
+            if pad: b64 += '='*(4-pad)
+            decoded = base64.b64decode(b64).decode('utf-8')
+            user, host_info = decoded.split('@')
+            uuid = user.split(':')[1]
+            server, port = host_info.split(':')
+            params = dict(urllib.parse.parse_qsl(query))
+            name = params.get('remarks', 'Imported-VMess')
+            net = params.get('obfs', 'tcp'); 
+            if net == 'websocket': net = 'ws'
+            tls = 'true' if params.get('tls')=='1' else 'false'
+            host = params.get('obfsParam') or params.get('peer') or server
+            return f"""- name: "{name}"\n  type: vmess\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  alterId: {params.get('alterId', 0)}\n  cipher: auto\n  udp: true\n  tls: {tls}\n  network: {net}\n  servername: {host}\n  ws-opts:\n    path: {params.get('path', '/')}\n    headers:\n      Host: {host}\n"""
+        except: return None
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         res = parse_vmess(sys.argv[1])
-        if res: print(res)
+        if res: 
+            print(res)
+        else:
+            # 如果解析失败，不做任何输出
+            pass
 EOF
 
 # ===========================================
@@ -88,7 +112,7 @@ if [ $count -gt 0 ]; then
 fi
 
 # ===========================================
-# 4. 生成本机节点 (格式严格对齐原版)
+# 4. 生成本机节点
 # ===========================================
 echo -e "${BLUE}🔍 生成本机节点...${PLAIN}"
 AUTO_NODES_TEMP="auto_nodes.tmp"
@@ -98,8 +122,6 @@ if [ -f "$INFO_FILE" ]; then
     source "$INFO_FILE"
     IP=$(curl -s https://api.ipify.org)
     
-    # [修正] 缩进策略：顶层元素顶格 (在 proxies 下)，子元素缩进 2 空格
-    # reality-opts 子元素再缩进 2 空格
     cat << EOF >> "$AUTO_NODES_TEMP"
 - name: ElJefe_Reality
   type: vless
@@ -114,7 +136,7 @@ if [ -f "$INFO_FILE" ]; then
   reality-opts:
     public-key: $PUB_KEY
     short-id: "$SID"
-    client-fingerprint: chrome
+  client-fingerprint: chrome
 
 EOF
 
@@ -156,7 +178,7 @@ EOF
 fi
 
 # ===========================================
-# 5. 手动节点管理
+# 5. 手动节点管理 (重点修复)
 # ===========================================
 echo "========================================"
 echo -e "${CYAN}🛠️  手动节点管理${PLAIN}"
@@ -173,37 +195,48 @@ fi
 read -p "❓ 添加新链接？[y/n]: " add_manual
 if [[ "$add_manual" == "y" || "$add_manual" == "Y" ]]; then
     read -r manual_link
-    [[ -n "$manual_link" ]] && echo "$manual_link" >> "$MANUAL_NODES_FILE"
+    # [修复] 确保写入成功
+    if [[ -n "$manual_link" ]]; then
+        echo "$manual_link" >> "$MANUAL_NODES_FILE"
+        echo -e "${GREEN}✅ 链接已保存${PLAIN}"
+    fi
 fi
 
 MANUAL_NODES_TEMP="manual_nodes.tmp"
 echo "" > "$MANUAL_NODES_TEMP"
 
 if [ -s "$MANUAL_NODES_FILE" ]; then
+    echo -e "${BLUE}🔍 处理手动节点文件...${PLAIN}"
     while read -r line; do
+        # 跳过空行和注释
         [[ -z "$line" ]] && continue
         [[ "$line" =~ ^#.*$ ]] && continue
         
         if [[ "$line" == vmess://* ]]; then
-            python3 vmess_parser.py "$line" >> "$MANUAL_NODES_TEMP"
-            echo "" >> "$MANUAL_NODES_TEMP"
+            # [修复] 调用 python 脚本并追加到 temp 文件
+            # 使用 RESULT 变量捕获输出，防止直接追加空内容
+            RESULT=$(python3 vmess_parser.py "$line")
+            if [[ -n "$RESULT" ]]; then
+                echo "$RESULT" >> "$MANUAL_NODES_TEMP"
+                echo "" >> "$MANUAL_NODES_TEMP" # 加空行
+            else
+                echo -e "${RED}❌ 解析失败: $line${PLAIN}"
+            fi
         else
-            # 普通 YAML 行，保持原样 (原版似乎是顶格的)
+            # 普通 YAML 保持原样
             echo "$line" >> "$MANUAL_NODES_TEMP"
         fi
     done < "$MANUAL_NODES_FILE"
 fi
 
 # ===========================================
-# 6. 提取名称 (增强匹配)
+# 6. 提取名称
 # ===========================================
 NODE_NAMES=""
 for temp_file in "$AUTO_NODES_TEMP" "$MANUAL_NODES_TEMP"; do
     if [ -s "$temp_file" ]; then
         while read -r line; do
-            # 匹配 name: (无论是否有缩进)
             if [[ "$line" =~ name: ]]; then
-                # 提取值并去空格去引号
                 NAME=$(echo "$line" | awk -F'name: ' '{print $2}' | tr -d '"' | tr -d "'" | sed 's/^[ \t]*//;s/[ \t]*$//')
                 [[ -n "$NAME" ]] && NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
             fi
@@ -219,6 +252,7 @@ if [ -s "$AUTO_NODES_TEMP" ]; then
 fi
 sed -i '/#VAR_AUTO_NODES#/d' template.tmp
 
+# [修复] 确保手动节点也被替换
 if [ -s "$MANUAL_NODES_TEMP" ]; then
     sed -i '/#VAR_MANUAL_NODES#/r manual_nodes.tmp' template.tmp
 fi

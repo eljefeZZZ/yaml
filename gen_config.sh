@@ -23,7 +23,7 @@ PLAIN='\033[0m'
 
 # --- 0. 初始化与清理 ---
 echo -e "${BLUE}🧹 [系统] 正在清理旧文件...${PLAIN}"
-rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
+rm -f *.tmp vmess_parser.py "$OUTPUT_FILE" provider_block.tmp group_insert.tmp
 
 # --- 1. 环境检查与 Python 解析器准备 ---
 if ! command -v python3 &> /dev/null; then
@@ -58,7 +58,6 @@ def parse_vmess(link):
             host = params.get('obfsParam') or params.get('peer') or server
             return f"""- name: "{name}"\ntype: vmess\nserver: {server}\nport: {port}\nuuid: {uuid}\nalterId: {params.get('alterId', 0)}\ncipher: auto\nudp: true\ntls: {tls}\nnetwork: {net}\nservername: {host}\nws-opts:\n  path: {params.get('path', '/')}\n  headers:\n    Host: {host}\n"""
         except: return None
-
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         res = parse_vmess(sys.argv[1])
@@ -109,10 +108,12 @@ while true; do
         count=$((count+1))
         provider_name="Airport_${count}"
         
-        # 关键修正：在 EOF 结束符前加回车，确保 YAML 格式正确
+        # 生成 Provider 配置块 (注意：path 必须不同)
         providers_yaml="${providers_yaml}  ${provider_name}:\n    type: http\n    url: \"${sub_url}\"\n    path: ./proxies/airport_${count}.yaml\n    interval: 86400\n    health-check:\n      enable: true\n      interval: 600\n      url: http://www.gstatic.com/generate_204\n\n"
         
+        # 生成策略组 use 列表
         group_use_yaml="${group_use_yaml}      - ${provider_name}\n"
+        
         echo -e "${GREEN}✅ 已添加: ${provider_name}${PLAIN}"
     else
         echo -e "${RED}❌ 链接为空，跳过。${PLAIN}"
@@ -123,16 +124,16 @@ done
 if [ $count -gt 0 ]; then
     echo -e "${BLUE}⚙️ 正在注入 ${count} 个机场配置...${PLAIN}"
     
-    # 删除模板原有的 Airport 示例
+    # 删除默认占位符
     sed -i '/^  Airport:/,+8d' template.tmp
     
-    # 插入新的 Providers
+    # 插入新 providers
     sed -i "/^proxy-providers:/a\\${providers_yaml}" template.tmp
     
-    # 删除旧 use 列表项
+    # 删除默认 use
     sed -i '/- Airport/d' template.tmp
     
-    # 插入新 use 列表项
+    # 插入新 use
     sed -i "/^    use:/a\\${group_use_yaml}" template.tmp
     
     echo -e "${GREEN}✅ 多机场配置注入完成。${PLAIN}"
@@ -141,10 +142,9 @@ else
 fi
 
 # =======================================================
-# 下面是被截断的部分，必须加上！
+# 🚀 原有逻辑：生成自动节点与拼接
 # =======================================================
 
-# --- 步骤 2: 动态生成自动节点 ---
 echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
 AUTO_NODES_TEMP="auto_nodes_generated.tmp"
 echo "" > "$AUTO_NODES_TEMP"
@@ -173,7 +173,7 @@ else
       client-fingerprint: chrome
 EOF
 
-    # 生成 VLESS/VMess CDN 节点 (如果有)
+    # 生成 CDN 节点 (如果存在域名)
     if [[ -n "$DOMAIN" ]]; then
         cat << EOF >> "$AUTO_NODES_TEMP"
   - name: ElJefe_VLESS_CDN
@@ -214,13 +214,14 @@ fi
 # --- 步骤 3: 处理手动节点 ---
 echo -e "${BLUE}🔍 [处理] 检查手动节点文件...${PLAIN}"
 if [ -f "$MANUAL_NODES_FILE" ]; then
-    # 这里简化处理，假设手动节点文件里就是一行一个 vmess:// 链接
     while read -r line; do
         if [[ "$line" == vmess://* ]]; then
             python3 vmess_parser.py "$line" >> "$AUTO_NODES_TEMP"
         else
-            # 如果是 YAML 格式的节点，直接追加
-            echo "$line" >> "$AUTO_NODES_TEMP"
+            # 忽略空行
+            if [[ -n "$line" ]]; then
+                echo "$line" >> "$AUTO_NODES_TEMP"
+            fi
         fi
     done < "$MANUAL_NODES_FILE"
 fi
@@ -228,39 +229,41 @@ fi
 # --- 步骤 4: 拼接最终 YAML ---
 echo -e "${BLUE}🔨 [构建] 正在生成最终 YAML...${PLAIN}"
 
-# 读取生成的节点名字
+# 提取生成的节点名字
 NODE_NAMES=""
+# 注意：要正确提取名字，需要按行读取并清洗
 while read -r line; do
     if [[ "$line" == *"- name:"* ]]; then
+        # 提取双引号内的名字
         NAME=$(echo "$line" | awk -F'"' '{print $2}')
         if [[ -n "$NAME" ]]; then
+            # 用 \n 换行符拼接，注意缩进
             NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
         fi
     fi
 done < "$AUTO_NODES_TEMP"
 
-# 替换节点插入点
+# 替换 <AUTO_GENERATED_PROXIES_HERE>
 sed -i '/<AUTO_GENERATED_PROXIES_HERE>/r auto_nodes_generated.tmp' template.tmp
 sed -i '/<AUTO_GENERATED_PROXIES_HERE>/d' template.tmp
 
-# 替换自建节点组名称
-# 注意：使用 awk 进行多行插入比较稳，或者直接用 sed 替换特定标记
+# 替换 <AUTO_GENERATED_PROXIES_NAMES>
 if [[ -n "$NODE_NAMES" ]]; then
-    # 删除原来的占位符
-    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/d' template.tmp
-    # 在 "🏠 我的自建组" 下面插入名字
-    # 找到 "    proxies:" 且上一行包含 "🏠 我的自建组" 的地方插入（比较复杂）
-    # 简单做法：我们在模板里留了一个 <AUTO_GENERATED_PROXIES_NAMES> 占位符
-    # 由于 sed 对换行符处理比较麻烦，我们用 perl 或者 awk，或者分步替换
+    # 使用 perl 进行多行替换，避免 sed 的换行符问题
+    # 我们把 NODE_NAMES 里的换行符转义一下，或者直接替换
+    # 这里的技巧是先把 NODE_NAMES 里的换行符变成实际的换行
+    # 但最简单的办法是用 perl -0777 -i -pe
     
-    # 简单替换法：
-    perl -i -pe "s|<AUTO_GENERATED_PROXIES_NAMES>|$NODE_NAMES|g" template.tmp
+    # 为了避免 shell 变量转义地狱，我们用一个临时文件辅助
+    echo -e "$NODE_NAMES" > node_names.tmp
+    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/r node_names.tmp' template.tmp
+    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/d' template.tmp
+    rm -f node_names.tmp
 else
-    # 如果没有节点，删掉占位符
     sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/d' template.tmp
 fi
 
-# 移动并重命名
+# 移动并清理
 mv template.tmp "$OUTPUT_FILE"
 rm -f auto_nodes_generated.tmp vmess_parser.py
 

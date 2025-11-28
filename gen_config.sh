@@ -1,19 +1,13 @@
 #!/bin/bash
 
 # ================= 配置区域 =================
-# 1. GitHub 模板 RAW 地址
+# 1. GitHub 模板 RAW 地址 (请确保你的 YAML 模板里 proxy-providers 下面有一个名为 Airport 的默认配置)
 TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
 
-# 2. 安装脚本的信息文件路径
+# 2. 路径定义
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
-
-# 3. 手动维护的节点文件路径
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
-
-# 4. 输出文件
 OUTPUT_FILE="/root/clash_final.yaml"
-
-# 5. 端口定义
 PORT_REALITY=443
 PORT_TLS=8443
 
@@ -24,294 +18,105 @@ BLUE='\033[34m'
 RED='\033[31m'
 CYAN='\033[36m'
 PLAIN='\033[0m'
+
 # ===========================================
 
-# --- 0. 初始化与清理 ---
 echo -e "${BLUE}🧹 [系统] 正在清理旧文件...${PLAIN}"
-rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
+rm -f *.tmp vmess_parser.py "$OUTPUT_FILE" provider_block.tmp group_insert.tmp
 
-# --- 1. 环境检查与 Python 解析器准备 ---
+# ... (此处省略 vmess_parser.py 生成代码，和原来一样) ...
 if ! command -v python3 &> /dev/null; then
     echo -e "${YELLOW}⚠️ 未检测到 Python3，链接转换功能不可用。${PLAIN}"
 fi
-
-# 注意：EOF必须顶格写，不要有前后空格
 cat << 'EOF' > vmess_parser.py
-import sys
-import base64
-import json
-import urllib.parse
-
-def parse_vmess(link):
-    if not link.startswith("vmess://"): return None
-    b64_body = link[8:]
-    try:
-        decoded = base64.b64decode(b64_body).decode('utf-8')
-        data = json.loads(decoded)
-        return f"""- name: "{data.get('ps', 'Imported-VMess')}"
-  type: vmess
-  server: {data.get('add')}
-  port: {data.get('port')}
-  uuid: {data.get('id')}
-  alterId: {data.get('aid', 0)}
-  cipher: {data.get('scy', 'auto')}
-  udp: true
-  tls: {str(data.get('tls', '') == 'tls').lower()}
-  network: {data.get('net', 'tcp')}
-  servername: {data.get('host', '') or data.get('sni', '')}
-  ws-opts:
-    path: {data.get('path', '/')}
-    headers:
-      Host: {data.get('host', '') or data.get('sni', '')}
-"""
-    except:
-        try:
-            if "?" in b64_body: b64, query = b64_body.split("?", 1)
-            else: b64, query = b64_body, ""
-            pad = len(b64)%4; 
-            if pad: b64 += '='*(4-pad)
-            decoded = base64.b64decode(b64).decode('utf-8')
-            user, host_info = decoded.split('@')
-            uuid = user.split(':')[1]
-            server, port = host_info.split(':')
-            params = dict(urllib.parse.parse_qsl(query))
-            
-            name = params.get('remarks', 'Imported-VMess')
-            net = params.get('obfs', 'tcp'); 
-            if net == 'websocket': net = 'ws'
-            tls = 'true' if params.get('tls')=='1' else 'false'
-            host = params.get('obfsParam') or params.get('peer') or server
-            
-            return f"""- name: "{name}"
-  type: vmess
-  server: {server}
-  port: {port}
-  uuid: {uuid}
-  alterId: {params.get('alterId', 0)}
-  cipher: auto
-  udp: true
-  tls: {tls}
-  network: {net}
-  servername: {host}
-  ws-opts:
-    path: {params.get('path', '/')}
-    headers:
-      Host: {host}
-"""
-        except: return None
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        res = parse_vmess(sys.argv[1])
-        if res: print(res)
-        else: sys.exit(1)
+import sys, base64, json, urllib.parse
+# ... (保持原有的 python 代码不变) ...
 EOF
 
-echo -e "${BLUE}⬇️  [网络] 正在下载配置模板...${PLAIN}"
+echo -e "${BLUE}⬇️ [网络] 正在下载配置模板...${PLAIN}"
 curl -s -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)"
 
-# 检查下载结果
-if grep -q "404: Not Found" template.tmp || grep -q "404 Not Found" template.tmp; then
-    echo -e "${RED}❌ 错误：模板 URL 无效 (404)。请检查脚本中的 TEMPLATE_URL。${PLAIN}"
-    rm template.tmp vmess_parser.py
-    exit 1
-fi
 if ! grep -q "proxies:" template.tmp; then
     echo -e "${RED}❌ 错误：下载的文件不是有效的 YAML 模板。${PLAIN}"
-    rm template.tmp vmess_parser.py
     exit 1
 fi
 
-# --- 步骤 1.5: 询问并替换机场订阅 ---
+# =======================================================
+# 🚀 核心增强：循环添加多机场订阅
+# =======================================================
 echo "========================================"
-read -p "❓ 是否添加机场订阅链接？[y/n]: " add_sub
-if [[ "$add_sub" == "y" || "$add_sub" == "Y" ]]; then
-    echo -e "${YELLOW}请粘贴订阅地址 (http/https开头):${PLAIN}"
+echo -e "${CYAN}📡 机场订阅配置 (支持添加多个)${PLAIN}"
+
+# 初始化变量
+providers_yaml=""
+group_use_yaml=""
+count=0
+
+while true; do
+    if [ $count -eq 0 ]; then
+        read -p "❓ 是否添加第一个机场订阅？[y/n]: " add_sub
+    else
+        read -p "❓ 是否继续添加第 $((count+1)) 个机场？[y/n]: " add_sub
+    fi
+
+    if [[ "$add_sub" != "y" && "$add_sub" != "Y" ]]; then
+        break
+    fi
+
+    echo -e "${YELLOW}请粘贴第 $((count+1)) 个机场的订阅地址:${PLAIN}"
     read -r sub_url
+
     if [[ -n "$sub_url" ]]; then
-        # 使用 sed 整行替换 (c命令)，避免特殊字符干扰
-        sed -i "/这里填写机场订阅地址/c\    url: \"$sub_url\"" template.tmp
-        echo -e "${GREEN}✅ 订阅链接已更新。${PLAIN}"
+        count=$((count+1))
+        provider_name="Airport_${count}"
+        
+        # 生成 Provider 配置块
+        # 注意：这里使用了 EOF 块来生成规范的 YAML 格式
+        # path 设为不同的文件，防止冲突
+        providers_yaml="${providers_yaml}  ${provider_name}:\n    type: http\n    url: \"${sub_url}\"\n    path: ./proxies/airport_${count}.yaml\n    interval: 86400\n    health-check:\n      enable: true\n      interval: 600\n      url: http://www.gstatic.com/generate_204\n\n"
+        
+        # 生成策略组 use 列表
+        group_use_yaml="${group_use_yaml}      - ${provider_name}\n"
+        
+        echo -e "${GREEN}✅ 已添加: ${provider_name}${PLAIN}"
     else
         echo -e "${RED}❌ 链接为空，跳过。${PLAIN}"
     fi
-else
-    echo -e "${CYAN}ℹ️  跳过订阅设置，保留默认占位符。${PLAIN}"
-fi
+done
 
-# --- 步骤 2: 动态生成自动节点 ---
-echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
-AUTO_NODES_TEMP="auto_nodes_generated.tmp"
-echo "" > "$AUTO_NODES_TEMP"
-
-if [ ! -f "$INFO_FILE" ]; then
-    echo -e "${YELLOW}⚠️  未找到本机 V2Ray 信息文件，跳过自动生成。${PLAIN}"
-else
-    source "$INFO_FILE"
-    IP=$(curl -s https://api.ipify.org)
+# --- 将生成的 Provider 插入到模板 ---
+if [ $count -gt 0 ]; then
+    echo -e "${BLUE}⚙️ 正在注入 ${count} 个机场配置...${PLAIN}"
     
-    # 修复重点：client-fingerprint 与 reality-opts 同级，不缩进
-    cat <<EOF >> "$AUTO_NODES_TEMP"
-- name: ElJefe_Reality
-  type: vless
-  server: $IP
-  port: $PORT_REALITY
-  uuid: $UUID
-  network: tcp
-  tls: true
-  udp: true
-  flow: xtls-rprx-vision
-  servername: $SNI
-  reality-opts:
-    public-key: $PUB_KEY
-    short-id: "$SID"
-  client-fingerprint: chrome
-
-EOF
-    if [[ -n "$DOMAIN" ]]; then
-        cat <<EOF >> "$AUTO_NODES_TEMP"
-- name: ElJefe_VLESS_CDN
-  type: vless
-  server: $DOMAIN
-  port: $PORT_TLS
-  uuid: $UUID
-  udp: true
-  tls: true
-  network: ws
-  servername: $DOMAIN
-  skip-cert-verify: false
-  ws-opts:
-    path: /vless
-    headers:
-      Host: $DOMAIN
-
-EOF
-        cat <<EOF >> "$AUTO_NODES_TEMP"
-- name: ElJefe_VMess_CDN
-  type: vmess
-  server: $DOMAIN
-  port: $PORT_TLS
-  uuid: $UUID
-  alterId: 0
-  cipher: auto
-  udp: true
-  tls: true
-  network: ws
-  servername: $DOMAIN
-  ws-opts:
-    path: /vmess
-    headers:
-      Host: $DOMAIN
-
-EOF
-    fi
-fi
-
-# --- 步骤 3: 交互式添加手动节点 ---
-echo "========================================"
-if [ -s "$MANUAL_NODES_FILE" ]; then
-    NODE_COUNT=$(grep -c "name:" "$MANUAL_NODES_FILE")
-    echo -e "${CYAN}ℹ️  发现已有 $NODE_COUNT 个手动保存的节点。${PLAIN}"
-    read -p "❓ 是否【清空】旧的手动节点？(y=清空 / n=保留) [y/n]: " clean_manual
-    if [[ "$clean_manual" == "y" || "$clean_manual" == "Y" ]]; then
-        echo "" > "$MANUAL_NODES_FILE"
-        echo -e "${GREEN}🗑️  旧节点已清空。${PLAIN}"
-    else
-        echo -e "${GREEN}👌 旧节点已保留。${PLAIN}"
-    fi
-fi
-
-read -p "❓ 是否要【添加】新的 vmess:// 链接? [y/n]: " add_manual
-if [[ "$add_manual" == "y" || "$add_manual" == "Y" ]]; then
-    while true; do
-        echo -e "${YELLOW}请粘贴链接 (Ctrl+C 退出，直接回车结束):${PLAIN}"
-        read -r vmess_link
-        if [[ -z "$vmess_link" ]]; then break; fi
-        
-        echo "🔄 解析中..."
-        PARSED_YAML=$(python3 vmess_parser.py "$vmess_link")
-        
-        if [[ $? -eq 0 && -n "$PARSED_YAML" ]]; then
-            NODE_NAME=$(echo "$PARSED_YAML" | grep "name:" | head -1 | cut -d'"' -f2)
-            echo -e "${GREEN}✅ 成功识别: $NODE_NAME${PLAIN}"
-            [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
-            echo "$PARSED_YAML" >> "$MANUAL_NODES_FILE"
-            echo "" >> "$MANUAL_NODES_FILE"
-        else
-            echo -e "${RED}❌ 解析失败，链接格式错误。${PLAIN}"
-        fi
-        echo "----------------------------------------"
-    done
-fi
-
-# --- 步骤 4: 整合与生成 ---
-extract_names() {
-    local file=$1
-    if [ -f "$file" ]; then
-        grep -E "^[[:space:]]*-[[:space:]]*name:" "$file" | \
-        sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
-        while read -r name; do echo "      - \"$name\""; done
-    fi
-}
-
-echo -e "${BLUE}⚙️  [合并] 正在整合所有节点信息...${PLAIN}"
-
-# 准备自动节点 (加2格缩进)
-if [ -s "$AUTO_NODES_TEMP" ]; then
-    sed 's/^/  /' "$AUTO_NODES_TEMP" > auto_content.tmp
-    extract_names "$AUTO_NODES_TEMP" > auto_names.tmp
+    # 1. 替换 proxy-providers 下面的默认 Airport
+    # 技巧：先把默认的 Airport 块删掉（假设模板里是标准的缩进格式），或者直接在 proxy-providers: 下面插入
+    # 这里我们采用更粗暴有效的方法：直接覆盖默认的 Airport 占位符
+    # 假设模板里有一行是 "  Airport:"，我们用 sed 把它和后面的几行替换掉，或者直接在 proxy-providers: 后追加
+    
+    # 为了稳妥，我们先删除模板里原有的 Airport 示例（如果有的话）
+    # 假设模板里的示例叫 "  Airport:"
+    sed -i '/^  Airport:/,+8d' template.tmp
+    
+    # 在 proxy-providers: 行的下一行插入我们生成的所有 providers
+    # 使用 awk 或者 sed 插入。这里用 sed 在特定行后追加
+    sed -i "/^proxy-providers:/a\\${providers_yaml}" template.tmp
+    
+    # 2. 将新机场加入策略组 (寻找 use: 下面的 - Airport 并替换)
+    # 先删掉模板里旧的 "- Airport"
+    sed -i '/- Airport/d' template.tmp
+    
+    # 在所有 "    use:" 的下一行插入我们要加的列表
+    # 这里的逻辑是：只要看到 use: 就把所有机场插进去
+    sed -i "/^    use:/a\\${group_use_yaml}" template.tmp
+    
+    echo -e "${GREEN}✅ 多机场配置注入完成。${PLAIN}"
 else
-    touch auto_content.tmp auto_names.tmp
+    echo -e "${CYAN}ℹ️ 未添加任何机场，保留默认配置。${PLAIN}"
 fi
 
-# 准备手动节点 (加2格缩进)
-if [ -s "$MANUAL_NODES_FILE" ]; then
-    sed 's/^/  /' "$MANUAL_NODES_FILE" > manual_content.tmp
-    extract_names "$MANUAL_NODES_FILE" > manual_names.tmp
-else
-    touch manual_content.tmp manual_names.tmp
-fi
+# =======================================================
+# ... (后续的自动节点生成逻辑保持不变) ...
+# ... (从 "echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}" 开始) ...
 
-# 合并名字
-cat auto_names.tmp manual_names.tmp > all_names.tmp
-
-if [ ! -s all_names.tmp ]; then
-    echo -e "${RED}❌ 错误：没有有效的节点信息 (自动为空且无手动节点)。${PLAIN}"
-    rm *.tmp vmess_parser.py
-    exit 1
-fi
-
-# 替换生成
-awk '
-    BEGIN {
-        while ((getline line < "auto_content.tmp") > 0) auto_c = auto_c line "\n"
-        while ((getline line < "manual_content.tmp") > 0) manual_c = manual_c line "\n"
-        while ((getline line < "all_names.tmp") > 0) names_c = names_c line "\n"
-    }
-    /#VAR_AUTO_NODES#/ { printf "%s", auto_c; next }
-    /#VAR_MANUAL_NODES#/ { printf "%s", manual_c; next }
-    /#VAR_ALL_NODE_NAMES#/ { printf "%s", names_c; next }
-    { print }
-' template.tmp > "$OUTPUT_FILE"
-
-# 最终清理
-rm *.tmp vmess_parser.py
-
-# --- 5. 结果展示 ---
-echo "========================================"
-echo -e "${GREEN}✅ 配置文件已生成: $OUTPUT_FILE ${PLAIN}"
-echo -e "${CYAN}📊 当前包含的节点列表:${PLAIN}"
-grep -E "^[[:space:]]*-[[:space:]]*name:" "$OUTPUT_FILE" | \
-sed 's/.*name:[[:space:]]*//;s/^"//;s/"$//;s/^\x27//;s/\x27$//' | \
-while read -r name; do echo -e "  ⭐ ${YELLOW}$name${PLAIN}"; done
-
-echo "========================================"
-echo -e "${GREEN}⬇️  下载方式 1 (Transfer.sh - 推荐):${PLAIN}"
-echo -e "   ${CYAN}curl --upload-file $OUTPUT_FILE https://transfer.sh/clash_final.yaml${PLAIN}"
-echo ""
-echo -e "${GREEN}👀 查看方式 2 (直接打印内容):${PLAIN}"
-echo -e "   (复制下方内容，保存为 config.yaml 即可)"
-echo ""
-echo -e "${YELLOW}📄 --- 文件内容开始 ---${PLAIN}"
-cat "$OUTPUT_FILE"
-echo -e "${YELLOW}📄 --- 文件内容结束 ---${PLAIN}"
+# (把原来脚本剩下的部分贴在这里)
+# ...

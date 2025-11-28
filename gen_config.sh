@@ -351,5 +351,30 @@ function show_menu() {
 if [ ! -f "$OUTPUT_FILE" ]; then
     clear
     print_title "🚀 欢迎使用 Clash 配置向导 (首次运行)"
+    
+    # 引导添加机场
     if [ ! -f "$AIRPORT_URLS_FILE" ]; then touch "$AIRPORT_URLS_FILE"; fi
-    read -p "$(
+    read -p "$(echo -e "${YELLOW}❓ 是否添加机场订阅？[y/n]: ${PLAIN}")" first_air
+    if [[ "$first_air" == "y" || "$first_air" == "Y" ]]; then
+        echo -e "${GREEN}➜ 粘贴地址:${PLAIN}"
+        read -r link
+        [[ -n "$link" ]] && echo "$link" >> "$AIRPORT_URLS_FILE"
+    fi
+
+    # 引导添加手动节点
+    if [ ! -f "$MANUAL_NODES_FILE" ]; then touch "$MANUAL_NODES_FILE"; fi
+    read -p "$(echo -e "${YELLOW}❓ 是否添加手动节点？[y/n]: ${PLAIN}")" first_node
+    if [[ "$first_node" == "y" || "$first_node" == "Y" ]]; then
+        echo -e "${GREEN}➜ 粘贴链接:${PLAIN}"
+        read -r link
+        [[ -n "$link" ]] && echo "$link" >> "$MANUAL_NODES_FILE"
+    fi
+    
+    run_generator
+    
+    echo -e "\n${CYAN}👉 提示: 再次运行此脚本即可进入管理维护面板。${PLAIN}"
+else
+    while true; do
+        show_menu
+    done
+fi

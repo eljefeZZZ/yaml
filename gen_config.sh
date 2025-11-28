@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置生成神器 (v10.2 解析修复版)
+# Clash 配置生成神器 (v11.0 最终定稿版)
 # ==============================================================
 
 # 1. 基础配置
@@ -24,9 +24,7 @@ BOLD='\033[1m'
 
 # --- 辅助函数 ---
 function print_title() {
-    echo -e "${PURPLE}┌──────────────────────────────────────────────┐${PLAIN}"
-    echo -e "${PURPLE}│${PLAIN} ${BOLD}$1${PLAIN}"
-    echo -e "${PURPLE}└──────────────────────────────────────────────┘${PLAIN}"
+    echo -e "\n${PURPLE}${BOLD}>> $1${PLAIN}"
 }
 function print_step() { echo -e "${BLUE}➜  $1${PLAIN}"; }
 function print_success() { echo -e "${GREEN}✔  $1${PLAIN}"; }
@@ -36,7 +34,7 @@ function print_error() { echo -e "${RED}✖  $1${PLAIN}"; }
 # 0. 初始化
 # ===========================================
 clear
-print_title "🚀 Clash 配置生成向导 v10.2"
+print_title "🚀 Clash 配置生成向导 v11.0"
 
 print_step "正在初始化..."
 rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
@@ -47,8 +45,7 @@ else
     print_success "环境检测通过"
 fi
 
-# [关键修复] 恢复双重解析逻辑 (JSON + Query String)
-# 并且每一行输出都严格缩进 2 空格
+# [修正] Python 输出改为顶格 (0缩进)，与自动节点保持一致
 cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 
@@ -56,24 +53,22 @@ def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     
-    # 1. 尝试标准 V2RayN (JSON) 格式
+    # 1. 标准格式
     try:
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
-        return f"""  - name: "{data.get('ps', 'Imported-VMess')}"\n    type: vmess\n    server: {data.get('add')}\n    port: {data.get('port')}\n    uuid: {data.get('id')}\n    alterId: {data.get('aid', 0)}\n    cipher: {data.get('scy', 'auto')}\n    udp: true\n    tls: {str(data.get('tls', '') == 'tls').lower()}\n    network: {data.get('net', 'tcp')}\n    servername: {data.get('host', '') or data.get('sni', '')}\n    ws-opts:\n      path: {data.get('path', '/')}\n      headers:\n        Host: {data.get('host', '') or data.get('sni', '')}\n"""
+        # 注意：这里改为顶格输出
+        return f"""- name: "{data.get('ps', 'Imported-VMess')}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
     except:
-        # 2. 尝试 QuanX/Shadowrocket (URL Params) 格式
+        # 2. QuanX格式
         try:
             if "?" in b64_body: b64, query = b64_body.split("?", 1)
             else: b64, query = b64_body, ""
             
-            # 补全 Base64 Padding
             pad = len(b64) % 4
             if pad: b64 += '=' * (4 - pad)
             
             decoded = base64.b64decode(b64).decode('utf-8')
-            # 格式通常是: chacha20-poly1305:uuid@server:port
-            # 或者 auto:uuid@server:port
             user_info, host_info = decoded.split('@')
             method, uuid = user_info.split(':')
             server, port = host_info.split(':')
@@ -86,8 +81,8 @@ def parse_vmess(link):
             host = params.get('obfsParam') or params.get('peer') or server
             path = params.get('path', '/')
             
-            # 生成 YAML (注意缩进 2 空格)
-            return f"""  - name: "{name}"\n    type: vmess\n    server: {server}\n    port: {port}\n    uuid: {uuid}\n    alterId: {params.get('alterId', 0)}\n    cipher: auto\n    udp: true\n    tls: {tls}\n    network: {net}\n    servername: {host}\n    ws-opts:\n      path: {path}\n      headers:\n        Host: {host}\n"""
+            # 注意：这里改为顶格输出
+            return f"""- name: "{name}"\n  type: vmess\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  alterId: {params.get('alterId', 0)}\n  cipher: auto\n  udp: true\n  tls: {tls}\n  network: {net}\n  servername: {host}\n  ws-opts:\n    path: {path}\n    headers:\n      Host: {host}\n"""
         except Exception as e:
             return None
 
@@ -113,7 +108,6 @@ fi
 # ===========================================
 # 3. 多机场订阅
 # ===========================================
-echo ""
 print_title "📡 机场订阅设置"
 
 providers_yaml=""
@@ -153,7 +147,6 @@ fi
 # ===========================================
 # 4. 生成本机节点
 # ===========================================
-echo ""
 print_title "🏠 本机节点生成"
 print_step "读取配置..."
 
@@ -164,8 +157,6 @@ if [ -f "$INFO_FILE" ]; then
     source "$INFO_FILE"
     IP=$(curl -s https://api.ipify.org)
     
-    # [格式] 顶层元素顶格(因为插入位置决定缩进)，子元素缩进2
-    # reality-opts 缩进2，其子元素缩进4
     cat << EOF >> "$AUTO_NODES_TEMP"
 - name: ElJefe_Reality
   type: vless
@@ -225,13 +216,11 @@ else
 fi
 
 # ===========================================
-# 5. 手动节点管理 (修复计数与解析)
+# 5. 手动节点管理
 # ===========================================
-echo ""
 print_title "🛠️  手动节点管理"
 
 if [ -f "$MANUAL_NODES_FILE" ] && [ -s "$MANUAL_NODES_FILE" ]; then
-    # 智能计数
     VMESS_COUNT=$(grep -c "vmess://" "$MANUAL_NODES_FILE")
     YAML_COUNT=$(grep -cE "^[[:space:]]*-[[:space:]]name:" "$MANUAL_NODES_FILE")
     TOTAL_COUNT=$((VMESS_COUNT + YAML_COUNT))
@@ -276,12 +265,8 @@ if [ -s "$MANUAL_NODES_FILE" ]; then
                 print_error "解析失败: ${line:0:15}..."
             fi
         else
-            # 普通 YAML，手动缩进
-            if [[ "$line" =~ ^- ]]; then
-                 echo "  $line" >> "$MANUAL_NODES_TEMP"
-            else
-                 echo "  $line" >> "$MANUAL_NODES_TEMP"
-            fi
+            # [修正] 普通 YAML 保持原样 (顶格)
+            echo "$line" >> "$MANUAL_NODES_TEMP"
         fi
     done < "$MANUAL_NODES_FILE"
     print_success "手动节点处理完成"
@@ -290,7 +275,6 @@ fi
 # ===========================================
 # 6. 提取名称 & 7. 拼接
 # ===========================================
-echo ""
 print_step "整合节点..."
 
 NODE_NAMES=""
@@ -329,7 +313,6 @@ rm -f auto_nodes.tmp manual_nodes.tmp vmess_parser.py
 # ===========================================
 # 8. 结束
 # ===========================================
-echo ""
 print_title "🎉 生成成功"
 echo -e "${GREEN}==============================================${PLAIN}"
 echo -e " 📂 文件: ${CYAN}${OUTPUT_FILE}${PLAIN}"

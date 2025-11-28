@@ -1,13 +1,17 @@
 #!/bin/bash
 
-# ================= 配置区域 =================
-# 1. GitHub 模板 RAW 地址
-TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
+# ==============================================================
+# Clash 配置生成脚本 (多机场订阅 + 自动/手动节点混合版)
+# 适配模板：clash_template_pro.yaml (含 #VAR_# 占位符)
+# ==============================================================
 
-# 2. 路径定义
+# 1. 路径与变量定义
+TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 OUTPUT_FILE="/root/clash_final.yaml"
+
+# 端口定义 (需与服务端保持一致)
 PORT_REALITY=443
 PORT_TLS=8443
 
@@ -20,28 +24,34 @@ CYAN='\033[36m'
 PLAIN='\033[0m'
 
 # ===========================================
+# 0. 初始化与清理
+# ===========================================
+echo -e "${BLUE}🧹 [系统] 正在清理旧临时文件...${PLAIN}"
+rm -f *.tmp vmess_parser.py "$OUTPUT_FILE"
 
-# --- 0. 初始化与清理 ---
-echo -e "${BLUE}🧹 [系统] 正在清理旧文件...${PLAIN}"
-rm -f *.tmp vmess_parser.py "$OUTPUT_FILE" provider_block.tmp group_insert.tmp
-
-# --- 1. 环境检查与 Python 解析器准备 ---
+# ===========================================
+# 1. 准备 Python 链接解析工具 (用于手动 VMess 链接)
+# ===========================================
 if ! command -v python3 &> /dev/null; then
-    echo -e "${YELLOW}⚠️ 未检测到 Python3，链接转换功能不可用。${PLAIN}"
+    echo -e "${YELLOW}⚠️ 未检测到 Python3，VMess 链接转换功能将不可用。${PLAIN}"
 fi
 
-# 生成 Python 脚本
+# 生成 Python 解析脚本 (完整版，防止解析失败)
 cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
+
 def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
+        # 尝试标准 Base64 解码
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
-        return f"""- name: "{data.get('ps', 'Imported-VMess')}"\ntype: vmess\nserver: {data.get('add')}\nport: {data.get('port')}\nuuid: {data.get('id')}\nalterId: {data.get('aid', 0)}\ncipher: {data.get('scy', 'auto')}\nudp: true\ntls: {str(data.get('tls', '') == 'tls').lower()}\nnetwork: {data.get('net', 'tcp')}\nservername: {data.get('host', '') or data.get('sni', '')}\nws-opts:\n  path: {data.get('path', '/')}\n  headers:\n    Host: {data.get('host', '') or data.get('sni', '')}\n"""
+        # 标准 V2rayN 格式
+        return f"""- name: "{data.get('ps', 'Imported-VMess')}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
     except:
         try:
+            # 尝试 QuanX/Shadowrocket 风格参数解析
             if "?" in b64_body: b64, query = b64_body.split("?", 1)
             else: b64, query = b64_body, ""
             pad = len(b64)%4; 
@@ -56,8 +66,9 @@ def parse_vmess(link):
             if net == 'websocket': net = 'ws'
             tls = 'true' if params.get('tls')=='1' else 'false'
             host = params.get('obfsParam') or params.get('peer') or server
-            return f"""- name: "{name}"\ntype: vmess\nserver: {server}\nport: {port}\nuuid: {uuid}\nalterId: {params.get('alterId', 0)}\ncipher: auto\nudp: true\ntls: {tls}\nnetwork: {net}\nservername: {host}\nws-opts:\n  path: {params.get('path', '/')}\n  headers:\n    Host: {host}\n"""
+            return f"""- name: "{name}"\n  type: vmess\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  alterId: {params.get('alterId', 0)}\n  cipher: auto\n  udp: true\n  tls: {tls}\n  network: {net}\n  servername: {host}\n  ws-opts:\n    path: {params.get('path', '/')}\n    headers:\n      Host: {host}\n"""
         except: return None
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         res = parse_vmess(sys.argv[1])
@@ -65,9 +76,13 @@ if __name__ == "__main__":
     else: sys.exit(1)
 EOF
 
+# ===========================================
+# 2. 下载配置模板
+# ===========================================
 echo -e "${BLUE}⬇️ [网络] 正在下载配置模板...${PLAIN}"
 curl -s -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)"
 
+# 检查模板有效性
 if grep -q "404: Not Found" template.tmp || grep -q "404 Not Found" template.tmp; then
     echo -e "${RED}❌ 错误：模板 URL 无效 (404)。${PLAIN}"
     rm template.tmp vmess_parser.py
@@ -80,36 +95,37 @@ if ! grep -q "proxies:" template.tmp; then
     exit 1
 fi
 
-# =======================================================
-# 🚀 核心增强：循环添加多机场订阅
-# =======================================================
+# ===========================================
+# 3. 多机场订阅处理 (循环询问)
+# ===========================================
 echo "========================================"
 echo -e "${CYAN}📡 机场订阅配置 (支持添加多个)${PLAIN}"
 
 providers_yaml=""
 group_use_yaml=""
-count=0
+airport_count=0
 
 while true; do
-    if [ $count -eq 0 ]; then
+    if [ $airport_count -eq 0 ]; then
         read -p "❓ 是否添加第一个机场订阅？[y/n]: " add_sub
     else
-        read -p "❓ 是否继续添加第 $((count+1)) 个机场？[y/n]: " add_sub
+        read -p "❓ 是否继续添加第 $((airport_count+1)) 个机场？[y/n]: " add_sub
     fi
 
     if [[ "$add_sub" != "y" && "$add_sub" != "Y" ]]; then
         break
     fi
 
-    echo -e "${YELLOW}请粘贴第 $((count+1)) 个机场的订阅地址:${PLAIN}"
+    echo -e "${YELLOW}请粘贴第 $((airport_count+1)) 个机场的订阅地址:${PLAIN}"
     read -r sub_url
 
     if [[ -n "$sub_url" ]]; then
-        count=$((count+1))
-        provider_name="Airport_${count}"
+        airport_count=$((airport_count+1))
+        provider_name="Airport_${airport_count}"
         
-        # 生成 Provider 配置块 (注意：path 必须不同)
-        providers_yaml="${providers_yaml}  ${provider_name}:\n    type: http\n    url: \"${sub_url}\"\n    path: ./proxies/airport_${count}.yaml\n    interval: 86400\n    health-check:\n      enable: true\n      interval: 600\n      url: http://www.gstatic.com/generate_204\n\n"
+        # 生成 Provider 配置块 (注意缩进)
+        # 使用 \n 手动构建多行字符串
+        providers_yaml="${providers_yaml}  ${provider_name}:\n    type: http\n    url: \"${sub_url}\"\n    path: ./proxies/airport_${airport_count}.yaml\n    interval: 86400\n    health-check:\n      enable: true\n      interval: 600\n      url: http://www.gstatic.com/generate_204\n\n"
         
         # 生成策略组 use 列表
         group_use_yaml="${group_use_yaml}      - ${provider_name}\n"
@@ -120,33 +136,32 @@ while true; do
     fi
 done
 
-# --- 将生成的 Provider 插入到模板 ---
-if [ $count -gt 0 ]; then
-    echo -e "${BLUE}⚙️ 正在注入 ${count} 个机场配置...${PLAIN}"
+# 注入机场配置到模板
+if [ $airport_count -gt 0 ]; then
+    echo -e "${BLUE}⚙️ 正在注入 ${airport_count} 个机场配置...${PLAIN}"
     
-    # 删除默认占位符
+    # 1. 替换 proxy-providers 下的默认 Airport 块
+    # 假设模板里有 "  Airport:" 这一行，删除它及后面几行
     sed -i '/^  Airport:/,+8d' template.tmp
-    
-    # 插入新 providers
+    # 在 proxy-providers: 后插入新的
     sed -i "/^proxy-providers:/a\\${providers_yaml}" template.tmp
     
-    # 删除默认 use
+    # 2. 替换 proxy-groups 下的 use 列表
+    # 删除旧的 "- Airport"
     sed -i '/- Airport/d' template.tmp
-    
-    # 插入新 use
+    # 在 "    use:" 后插入新的列表
     sed -i "/^    use:/a\\${group_use_yaml}" template.tmp
     
     echo -e "${GREEN}✅ 多机场配置注入完成。${PLAIN}"
 else
-    echo -e "${CYAN}ℹ️ 未添加任何机场，保留默认配置。${PLAIN}"
+    echo -e "${CYAN}ℹ️ 未添加任何机场，保留默认配置 (需手动修改)。${PLAIN}"
 fi
 
-# =======================================================
-# 🚀 原有逻辑：生成自动节点与拼接
-# =======================================================
-
+# ===========================================
+# 4. 自动生成本机 Reality/VLESS 节点
+# ===========================================
 echo -e "${BLUE}🔍 [处理] 读取本机自动节点信息...${PLAIN}"
-AUTO_NODES_TEMP="auto_nodes_generated.tmp"
+AUTO_NODES_TEMP="auto_nodes.tmp"
 echo "" > "$AUTO_NODES_TEMP"
 
 if [ ! -f "$INFO_FILE" ]; then
@@ -173,7 +188,7 @@ else
       client-fingerprint: chrome
 EOF
 
-    # 生成 CDN 节点 (如果存在域名)
+    # 生成 CDN 节点 (如果有域名)
     if [[ -n "$DOMAIN" ]]; then
         cat << EOF >> "$AUTO_NODES_TEMP"
   - name: ElJefe_VLESS_CDN
@@ -211,61 +226,93 @@ EOF
     fi
 fi
 
-# --- 步骤 3: 处理手动节点 ---
+# ===========================================
+# 5. 处理手动添加的节点 (Manual Nodes)
+# ===========================================
 echo -e "${BLUE}🔍 [处理] 检查手动节点文件...${PLAIN}"
+MANUAL_NODES_TEMP="manual_nodes.tmp"
+echo "" > "$MANUAL_NODES_TEMP"
+
 if [ -f "$MANUAL_NODES_FILE" ]; then
     while read -r line; do
+        # 忽略注释和空行
+        [[ "$line" =~ ^#.*$ ]] && continue
+        [[ -z "$line" ]] && continue
+        
         if [[ "$line" == vmess://* ]]; then
-            python3 vmess_parser.py "$line" >> "$AUTO_NODES_TEMP"
+            # 解析 VMess 链接
+            python3 vmess_parser.py "$line" >> "$MANUAL_NODES_TEMP"
         else
-            # 忽略空行
-            if [[ -n "$line" ]]; then
-                echo "$line" >> "$AUTO_NODES_TEMP"
-            fi
+            # 假设是 YAML 格式，直接追加
+            echo "$line" >> "$MANUAL_NODES_TEMP"
         fi
     done < "$MANUAL_NODES_FILE"
 fi
 
-# --- 步骤 4: 拼接最终 YAML ---
-echo -e "${BLUE}🔨 [构建] 正在生成最终 YAML...${PLAIN}"
-
-# 提取生成的节点名字
+# ===========================================
+# 6. 提取所有节点名称 (用于填充自建策略组)
+# ===========================================
+echo -e "${BLUE}🔨 [构建] 正在提取节点名称...${PLAIN}"
 NODE_NAMES=""
-# 注意：要正确提取名字，需要按行读取并清洗
-while read -r line; do
-    if [[ "$line" == *"- name:"* ]]; then
-        # 提取双引号内的名字
-        NAME=$(echo "$line" | awk -F'"' '{print $2}')
-        if [[ -n "$NAME" ]]; then
-            # 用 \n 换行符拼接，注意缩进
-            NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
+
+# 6.1 提取自动节点的名称
+if [ -f "$AUTO_NODES_TEMP" ]; then
+    while read -r line; do
+        if [[ "$line" == *"- name:"* ]]; then
+            NAME=$(echo "$line" | awk -F'"' '{print $2}')
+            if [[ -n "$NAME" ]]; then
+                NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
+            fi
         fi
-    fi
-done < "$AUTO_NODES_TEMP"
-
-# 替换 <AUTO_GENERATED_PROXIES_HERE>
-sed -i '/<AUTO_GENERATED_PROXIES_HERE>/r auto_nodes_generated.tmp' template.tmp
-sed -i '/<AUTO_GENERATED_PROXIES_HERE>/d' template.tmp
-
-# 替换 <AUTO_GENERATED_PROXIES_NAMES>
-if [[ -n "$NODE_NAMES" ]]; then
-    # 使用 perl 进行多行替换，避免 sed 的换行符问题
-    # 我们把 NODE_NAMES 里的换行符转义一下，或者直接替换
-    # 这里的技巧是先把 NODE_NAMES 里的换行符变成实际的换行
-    # 但最简单的办法是用 perl -0777 -i -pe
-    
-    # 为了避免 shell 变量转义地狱，我们用一个临时文件辅助
-    echo -e "$NODE_NAMES" > node_names.tmp
-    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/r node_names.tmp' template.tmp
-    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/d' template.tmp
-    rm -f node_names.tmp
-else
-    sed -i '/<AUTO_GENERATED_PROXIES_NAMES>/d' template.tmp
+    done < "$AUTO_NODES_TEMP"
 fi
 
-# 移动并清理
-mv template.tmp "$OUTPUT_FILE"
-rm -f auto_nodes_generated.tmp vmess_parser.py
+# 6.2 提取手动节点的名称
+if [ -f "$MANUAL_NODES_TEMP" ]; then
+    while read -r line; do
+        if [[ "$line" == *"- name:"* ]]; then
+            NAME=$(echo "$line" | awk -F'"' '{print $2}')
+            if [[ -n "$NAME" ]]; then
+                NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
+            fi
+        fi
+    done < "$MANUAL_NODES_TEMP"
+fi
 
+# ===========================================
+# 7. 拼接最终 YAML (替换所有占位符)
+# ===========================================
+echo -e "${BLUE}🔨 [构建] 正在生成最终 YAML...${PLAIN}"
+
+# 7.1 替换 #VAR_AUTO_NODES# (使用 sed r 命令)
+if [ -s "$AUTO_NODES_TEMP" ]; then
+    sed -i '/#VAR_AUTO_NODES#/r auto_nodes.tmp' template.tmp
+fi
+sed -i '/#VAR_AUTO_NODES#/d' template.tmp
+
+# 7.2 替换 #VAR_MANUAL_NODES#
+if [ -s "$MANUAL_NODES_TEMP" ]; then
+    sed -i '/#VAR_MANUAL_NODES#/r manual_nodes.tmp' template.tmp
+fi
+sed -i '/#VAR_MANUAL_NODES#/d' template.tmp
+
+# 7.3 替换 #VAR_ALL_NODE_NAMES# (使用临时文件辅助)
+if [[ -n "$NODE_NAMES" ]]; then
+    echo -e "$NODE_NAMES" > node_names.tmp
+    sed -i '/#VAR_ALL_NODE_NAMES#/r node_names.tmp' template.tmp
+    rm -f node_names.tmp
+fi
+sed -i '/#VAR_ALL_NODE_NAMES#/d' template.tmp
+
+# 移动并设置权限
+mv template.tmp "$OUTPUT_FILE"
+chmod 644 "$OUTPUT_FILE"
+
+# 清理
+rm -f auto_nodes.tmp manual_nodes.tmp vmess_parser.py
+
+# ===========================================
+# 8. 完成
+# ===========================================
 echo -e "${GREEN}🎉 配置生成成功！文件位置: ${OUTPUT_FILE}${PLAIN}"
-echo -e "${CYAN}👉 请在客户端导入此文件即可使用。${PLAIN}"
+echo -e "${CYAN}👉 请下载该文件并导入 Clash 客户端。${PLAIN}"

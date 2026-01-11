@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.1 像素级对齐版)
+# Clash 配置管理神器 (v13.2 VLESS增强版)
 # ==============================================================
 
 # --- 全局配置 ---
@@ -38,8 +38,10 @@ function init_env() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告: 未检测到 Python3${PLAIN}"
     fi
+    # 注意：这里嵌入了升级版的 Python 脚本，支持 VMess 和 VLESS
     cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
+
 def parse_vmess(link):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
@@ -66,9 +68,84 @@ def parse_vmess(link):
             path = params.get('path', '/')
             return f"""- name: "{name}"\n  type: vmess\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  alterId: {params.get('alterId', 0)}\n  cipher: auto\n  udp: true\n  tls: {tls}\n  network: {net}\n  servername: {host}\n  ws-opts:\n    path: {path}\n    headers:\n      Host: {host}\n"""
         except: return None
+
+def parse_vless(link):
+    if not link.startswith("vless://"): return None
+    try:
+        # 1. 分离 fragment (节点名称)
+        body = link[8:]
+        if "#" in body:
+            main_part, name = body.split("#", 1)
+            name = urllib.parse.unquote(name).strip()
+        else:
+            main_part, name = body, "Imported-VLESS"
+            
+        # 2. 分离 query 参数
+        if "?" in main_part:
+            user_host, query = main_part.split("?", 1)
+            params = dict(urllib.parse.parse_qsl(query))
+        else:
+            user_host, query, params = main_part, "", {}
+
+        # 3. 分离 UUID 和 Host:Port
+        if "@" in user_host:
+            uuid, host_port = user_host.split("@", 1)
+        else:
+            return None 
+
+        # 4. 分离 IP 和 端口 (处理 IPv6)
+        if ":" in host_port:
+            if "]:" in host_port: # IPv6 like [::1]:443
+                server, port = host_port.rsplit(":", 1)
+                server = server.replace("[", "").replace("]", "")
+            else:
+                server, port = host_port.split(":", 1)
+        else:
+            return None
+
+        # 5. 提取参数
+        type_net = params.get("type", "tcp")
+        security = params.get("security", "none")
+        flow = params.get("flow", "")
+        sni = params.get("sni", "")
+        pbk = params.get("pbk", "") # Reality public key
+        sid = params.get("sid", "") # Reality short id
+        fp = params.get("fp", "chrome")
+        path = params.get("path", "/")
+        host = params.get("host", "")
+        service_name = params.get("serviceName", "") # For grpc
+
+        # 6. 构建 YAML
+        yaml_str = f'- name: "{name}"\n  type: vless\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  udp: true\n  tls: {str(security != "none").lower()}\n  network: {type_net}\n'
+        
+        if flow: yaml_str += f'  flow: {flow}\n'
+        if sni: yaml_str += f'  servername: {sni}\n'
+        
+        # Reality / TLS 特有配置
+        if security == "reality":
+            yaml_str += f'  reality-opts:\n    public-key: {pbk}\n    short-id: "{sid}"\n  client-fingerprint: {fp}\n'
+        elif security == "tls":
+            yaml_str += f'  skip-cert-verify: true\n'
+            
+        # 传输层配置
+        if type_net == "ws":
+             yaml_str += f'  ws-opts:\n    path: {path}\n    headers:\n      Host: {host if host else sni}\n'
+        elif type_net == "grpc":
+             yaml_str += f'  grpc-opts:\n    grpc-service-name: {service_name}\n'
+        
+        return yaml_str
+    except Exception as e:
+        return None
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        res = parse_vmess(sys.argv[1])
+        link = sys.argv[1].strip()
+        res = None
+        if link.startswith("vmess://"):
+            res = parse_vmess(link)
+        elif link.startswith("vless://"):
+            res = parse_vless(link)
+        
         if res: print(res)
 EOF
 }
@@ -201,7 +278,8 @@ EOF
         while read -r line; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^#.*$ ]] && continue
-            if [[ "$line" == vmess://* ]]; then
+            # 修改点：增加了对 vless:// 的判断
+            if [[ "$line" == vmess://* || "$line" == vless://* ]]; then
                 RESULT=$(python3 vmess_parser.py "$line")
                 [[ -n "$RESULT" ]] && echo "$RESULT" >> "$MANUAL_NODES_TEMP" && echo "" >> "$MANUAL_NODES_TEMP"
             else
@@ -268,7 +346,7 @@ function menu_add_airport() {
 function menu_add_manual() {
     echo ""
     print_title "➕ 添加手动节点"
-    echo -e "${GREEN}➜ 粘贴链接 (vmess://...):${PLAIN}"
+    echo -e "${GREEN}➜ 粘贴链接 (vmess://... 或 vless://...):${PLAIN}"
     read -r link
     if [[ -n "$link" ]]; then
         [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
@@ -306,7 +384,7 @@ function menu_reset_all() {
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.1${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.2${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
     # 计数
@@ -315,10 +393,6 @@ function show_menu() {
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
     # [对齐] 使用 printf 格式化输出
-    # %-3s: 左对齐数字
-    # %-1s: 图标占位
-    # %s: 文字内容
-    
     printf "${GREEN} 1.${PLAIN} %-1s %s\n" "🔄" "重新生成配置 (加载所有数据)"
     printf "${GREEN} 2.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️ " "添加机场订阅" "$AIR_CNT"
     printf "${GREEN} 3.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"

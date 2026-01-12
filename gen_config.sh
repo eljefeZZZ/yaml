@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.4 - 节点命名大师版)
+# Clash 配置管理神器 (v13.4 - UI对齐修复版)
 # ==============================================================
 
 # --- 全局配置 ---
@@ -10,7 +10,7 @@ INFO_FILE="/usr/local/eljefe-v2/info.txt"
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 AIRPORT_URLS_FILE="/root/airport_urls.txt"
 OUTPUT_FILE="/root/clash_final.yaml"
-LOCAL_NAME_FILE="/root/local_node_name.txt" # 新增：存储本机节点名称配置
+LOCAL_NAME_FILE="/root/local_node_name.txt"
 PORT_REALITY=443
 PORT_TLS=8443
 
@@ -39,7 +39,7 @@ function init_env() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告: 未检测到 Python3${PLAIN}"
     fi
-    # Python 解析脚本 (支持自定义名称传参)
+    # Python 解析脚本
     cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 
@@ -405,7 +405,7 @@ function menu_reset_all() {
     fi
 }
 
-# --- 新增：节点重命名管理 ---
+# --- 节点重命名管理 ---
 function menu_rename_local() {
     print_title "🏠 重命名本机节点"
     CUR_NAME="ElJefe"
@@ -458,13 +458,11 @@ function menu_rename_manual() {
     echo ""
     read -p "请输入序号 (0-$((i-1))): " choice
     
-    # 验证输入是否为数字且在范围内
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -ge "$i" ]; then
         print_error "无效序号"
         return
     fi
 
-    # 获取选中的行
     selected_line="${lines[$choice]}"
     read -r link old_name <<< "$selected_line"
     
@@ -473,10 +471,7 @@ function menu_rename_manual() {
     read -r new_input_name
     
     if [[ -n "$new_input_name" ]]; then
-        # 替换数组中的行
         lines[$choice]="$link $new_input_name"
-        
-        # 重新写入文件
         printf "%s\n" "${lines[@]}" > "$MANUAL_NODES_FILE"
         print_success "名称已更新！"
         echo -e "${CYAN}👉 请运行 [1] 重新生成配置以生效。${PLAIN}"
@@ -512,14 +507,15 @@ function show_menu() {
     [ -f "$AIRPORT_URLS_FILE" ] && AIR_CNT=$(grep -cve '^\s*$' "$AIRPORT_URLS_FILE")
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
-    printf "${GREEN} 1.${PLAIN} %-1s %s\n" "🔄" "重新生成配置 (加载所有数据)"
-    printf "${GREEN} 2.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️ " "添加机场订阅" "$AIR_CNT"
-    printf "${GREEN} 3.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
-    printf "${GREEN} 4.${PLAIN} %-1s %s\n" "🗑️ " "清空数据 (节点/订阅)"
-    printf "${GREEN} 5.${PLAIN} %-1s %s\n" "📄" "查看配置文件"
-    printf "${BLUE} 7.${PLAIN} %-1s %s\n" "✏️ " "重命名节点 (本机/手动)"
-    printf "${RED} 6.${PLAIN} %-1s %s\n" "🧹" "重置所有数据 (删库)"
-    printf "${GREEN} 0.${PLAIN} %-1s %s\n" "🚪" "退出"
+    # [修复] 使用 %-4s 为图标列预留固定宽度，确保对齐
+    printf "${GREEN} 1.${PLAIN}  %-4s %s\n" "🔄" "重新生成配置 (加载所有数据)"
+    printf "${GREEN} 2.${PLAIN}  %-4s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️" "添加机场订阅" "$AIR_CNT"
+    printf "${GREEN} 3.${PLAIN}  %-4s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
+    printf "${GREEN} 4.${PLAIN}  %-4s %s\n" "🗑️" "清空数据 (节点/订阅)"
+    printf "${GREEN} 5.${PLAIN}  %-4s %s\n" "📄" "查看配置文件"
+    printf "${BLUE} 7.${PLAIN}  %-4s %s\n" "✏️" "重命名节点 (本机/手动)"
+    printf "${RED} 6.${PLAIN}  %-4s %s\n" "🧹" "重置所有数据 (删库)"
+    printf "${GREEN} 0.${PLAIN}  %-4s %s\n" "🚪" "退出"
     
     echo -e "${PURPLE}==============================================${PLAIN}"
     echo -e " 📂 输出路径: ${CYAN}${OUTPUT_FILE}${PLAIN}"

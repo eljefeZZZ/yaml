@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.5 - UI完美对齐版)
+# Clash 配置管理神器 (v13.6 - 完美管理版)
 # ==============================================================
 
 # --- 全局配置 ---
@@ -211,13 +211,11 @@ function run_generator() {
     AUTO_NODES_TEMP="auto_nodes.tmp"
     echo "" > "$AUTO_NODES_TEMP"
     
-    # --- 获取本机节点自定义名称前缀 ---
     LOCAL_PREFIX="ElJefe"
     if [ -f "$LOCAL_NAME_FILE" ]; then
         READ_NAME=$(cat "$LOCAL_NAME_FILE" | tr -d '\n')
         [[ -n "$READ_NAME" ]] && LOCAL_PREFIX="$READ_NAME"
     fi
-    # -------------------------------
 
     if [ -f "$INFO_FILE" ]; then
         source "$INFO_FILE"
@@ -289,7 +287,12 @@ EOF
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^#.*$ ]] && continue
             
-            read -r link_url custom_name <<< "$line"
+            # 兼容处理：确保只提取前两个部分（链接 和 名字）
+            # 这解决了如果文件里有多个空格导致的解析问题
+            link_url=$(echo "$line" | awk '{print $1}')
+            # 名字取第二个字段及之后所有内容（防止名字带空格被截断，虽然建议不带）
+            # 但为了安全，我们假设文件格式严格为 "链接 名字"
+            custom_name=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^[ \t]*//')
             
             if [[ "$link_url" == vmess://* || "$link_url" == vless://* ]]; then
                 RESULT=$(python3 vmess_parser.py "$link_url" "$custom_name")
@@ -339,162 +342,165 @@ EOF
 }
 
 # ===========================================
-# 菜单功能
+# 菜单功能 (模块化)
 # ===========================================
 
 function menu_add_airport() {
-    echo ""
     print_title "✈️  添加机场订阅"
     echo -e "${GREEN}➜ 粘贴地址 (http...):${PLAIN}"
     read -r link
     if [[ -n "$link" ]]; then
         [ ! -f "$AIRPORT_URLS_FILE" ] && touch "$AIRPORT_URLS_FILE"
         echo "$link" >> "$AIRPORT_URLS_FILE"
-        print_success "订阅已保存，运行 [1] 生效。"
+        print_success "订阅已保存。"
     else
         print_error "输入为空"
     fi
 }
 
-function menu_add_manual() {
-    echo ""
-    print_title "➕ 添加手动节点"
-    echo -e "${GREEN}1. 粘贴链接 (vmess://... 或 vless://...):${PLAIN}"
-    read -r link
-    
-    if [[ -n "$link" ]]; then
-        echo -e "${GREEN}2. 给节点起个名字 (留空则使用默认):${PLAIN}"
-        read -r node_name
-        
-        [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
-        
-        if [[ -n "$node_name" ]]; then
-            echo "$link $node_name" >> "$MANUAL_NODES_FILE"
-            print_success "节点 [$node_name] 已保存！"
-        else
-            echo "$link" >> "$MANUAL_NODES_FILE"
-            print_success "节点已保存（使用默认名）。"
-        fi
-        echo -e "${CYAN}👉 记得运行选项 [1] 重新生成配置生效。${PLAIN}"
-    else
-        print_error "输入为空"
-    fi
-}
-
-function menu_clear_data() {
-    echo ""
-    echo -e "${YELLOW}请选择要清空的数据:${PLAIN}"
-    echo -e " 1. 清空手动节点"
-    echo -e " 2. 清空机场订阅"
-    echo -e " 0. 取消"
-    read -p "请输入: " sub_choice
-    case "$sub_choice" in
-        1) echo "" > "$MANUAL_NODES_FILE"; print_success "手动节点已清空。";;
-        2) echo "" > "$AIRPORT_URLS_FILE"; print_success "机场订阅已清空。";;
-        *) echo "取消" ;;
-    esac
-}
-
-function menu_reset_all() {
-    echo ""
-    read -p "$(echo -e "${RED}⚠️  删除所有配置？[y/n]: ${PLAIN}")" confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        rm -f "$OUTPUT_FILE" "$MANUAL_NODES_FILE" "$AIRPORT_URLS_FILE" "$LOCAL_NAME_FILE"
-        print_success "已重置。"
-        exit 0
-    fi
-}
-
-# --- 节点重命名管理 ---
 function menu_rename_local() {
-    print_title "🏠 重命名本机节点"
+    print_title "🏠 本机节点前缀设置"
     CUR_NAME="ElJefe"
     [ -f "$LOCAL_NAME_FILE" ] && CUR_NAME=$(cat "$LOCAL_NAME_FILE")
     
-    echo -e "当前本机节点前缀: ${YELLOW}${CUR_NAME}${PLAIN}"
-    echo -e "生成后效果: ${CUR_NAME}_Reality / ${CUR_NAME}_CDN"
+    echo -e "当前前缀: ${YELLOW}${CUR_NAME}${PLAIN}"
+    echo -e "示例效果: ${CUR_NAME}_Reality"
     echo ""
-    echo -e "${GREEN}➜ 请输入新的节点前缀 (例如 US_Node):${PLAIN}"
+    echo -e "${GREEN}➜ 输入新前缀 (例如 US_Node):${PLAIN}"
     read -r new_name
     if [[ -n "$new_name" ]]; then
         echo "$new_name" > "$LOCAL_NAME_FILE"
-        print_success "已修改为: $new_name"
-        echo -e "${CYAN}👉 请运行 [1] 重新生成配置以生效。${PLAIN}"
+        print_success "已修改，请 [1] 重新生成生效。"
     else
         echo "未修改。"
     fi
 }
 
-function menu_rename_manual() {
-    print_title "✏️  重命名手动节点"
-    if [ ! -s "$MANUAL_NODES_FILE" ]; then
-        print_error "没有找到手动节点文件。"
-        return
-    fi
-
-    mapfile -t lines < "$MANUAL_NODES_FILE"
-    
-    if [ ${#lines[@]} -eq 0 ]; then
-         print_error "节点列表为空。"
-         return
-    fi
-
-    echo -e "${YELLOW}请选择要重命名的节点:${PLAIN}"
-    i=0
-    for line in "${lines[@]}"; do
-        [[ -z "$line" ]] && continue
-        read -r link name <<< "$line"
-        if [[ -z "$name" ]]; then name="(默认名称)"; fi
-        short_link="${link:0:20}..."
-        echo -e " [${i}] 名称: ${CYAN}${name}${PLAIN} \t链接: ${short_link}"
-        i=$((i+1))
+# --- 核心：手动节点管理中心 ---
+function menu_manual_manager() {
+    while true; do
+        clear
+        echo -e "${PURPLE}==============================================${PLAIN}"
+        echo -e "${BOLD}   🧩 手动节点管理中心 ${PLAIN}"
+        echo -e "${PURPLE}==============================================${PLAIN}"
+        
+        # 读取节点列表
+        [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
+        mapfile -t lines < "$MANUAL_NODES_FILE"
+        node_count=${#lines[@]}
+        
+        # 显示列表
+        if [ $node_count -eq 0 ]; then
+             echo -e "${CYAN}   (暂无节点)${PLAIN}"
+        else
+            echo -e "${YELLOW}   序号  名称                链接预览${PLAIN}"
+            echo -e "${YELLOW}   ----  ------------------  ----------------${PLAIN}"
+            i=0
+            for line in "${lines[@]}"; do
+                [[ -z "$line" ]] && continue
+                # 严格分割：第一部分是链接，剩余部分是名字
+                link=$(echo "$line" | awk '{print $1}')
+                name=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^[ \t]*//')
+                
+                if [[ -z "$name" ]]; then name="(默认)"; fi
+                
+                # 截断显示
+                d_name="${name:0:18}"
+                d_link="${link:0:25}..."
+                printf "   [%2d]  %-18s  %s\n" "$i" "$d_name" "$d_link"
+                i=$((i+1))
+            done
+        fi
+        echo -e "${PURPLE}==============================================${PLAIN}"
+        echo -e " ${GREEN}a.${PLAIN} 新增节点"
+        echo -e " ${RED}d.${PLAIN} 删除节点"
+        echo -e " ${BLUE}r.${PLAIN} 重命名节点"
+        echo -e " ${YELLOW}c.${PLAIN} 清空所有节点"
+        echo -e " ${GREEN}0.${PLAIN} 返回主菜单"
+        echo ""
+        read -p " 请输入操作: " op
+        
+        case "$op" in
+            a)
+                echo ""
+                echo -e "${GREEN}➜ 粘贴链接 (vmess://...):${PLAIN}"
+                read -r link
+                if [[ -n "$link" ]]; then
+                    echo -e "${GREEN}➜ 命名 (可选，回车默认):${PLAIN}"
+                    read -r name
+                    if [[ -n "$name" ]]; then
+                        echo "$link $name" >> "$MANUAL_NODES_FILE"
+                    else
+                        echo "$link" >> "$MANUAL_NODES_FILE"
+                    fi
+                    print_success "已添加！"
+                fi
+                ;;
+            d)
+                if [ $node_count -eq 0 ]; then print_error "列表为空"; sleep 1; continue; fi
+                read -p "请输入要删除的序号: " idx
+                if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -lt "$node_count" ]; then
+                    # 删除指定行
+                    sed -i "$((idx+1))d" "$MANUAL_NODES_FILE"
+                    print_success "已删除！"
+                else
+                    print_error "无效序号"
+                fi
+                sleep 1
+                ;;
+            r)
+                if [ $node_count -eq 0 ]; then print_error "列表为空"; sleep 1; continue; fi
+                read -p "请输入要重命名的序号: " idx
+                if [[ "$idx" =~ ^[0-9]+$ ]] && [ "$idx" -lt "$node_count" ]; then
+                    old_line="${lines[$idx]}"
+                    # 提取纯净链接，丢弃旧名字
+                    pure_link=$(echo "$old_line" | awk '{print $1}')
+                    
+                    echo -e "${GREEN}➜ 请输入新名称 (不要包含空格):${PLAIN}"
+                    read -r new_name
+                    if [[ -n "$new_name" ]]; then
+                        # 覆盖：先删除原行，再插入新行（或者直接修改文件）
+                        # 这里使用完全重写文件的方式最安全，防止sed行号偏移
+                        lines[$idx]="$pure_link $new_name"
+                        printf "%s\n" "${lines[@]}" > "$MANUAL_NODES_FILE"
+                        print_success "已重命名！"
+                    fi
+                else
+                    print_error "无效序号"
+                fi
+                sleep 1
+                ;;
+            c)
+                echo "" > "$MANUAL_NODES_FILE"
+                print_success "已清空"
+                sleep 1
+                ;;
+            0) break ;;
+            *) echo "无效"; sleep 0.5 ;;
+        esac
     done
-
-    echo ""
-    read -p "请输入序号 (0-$((i-1))): " choice
-    
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -ge "$i" ]; then
-        print_error "无效序号"
-        return
-    fi
-
-    selected_line="${lines[$choice]}"
-    read -r link old_name <<< "$selected_line"
-    
-    echo -e "当前名称: ${YELLOW}${old_name:-默认}${PLAIN}"
-    echo -e "${GREEN}➜ 请输入新名称 (不要包含空格):${PLAIN}"
-    read -r new_input_name
-    
-    if [[ -n "$new_input_name" ]]; then
-        lines[$choice]="$link $new_input_name"
-        printf "%s\n" "${lines[@]}" > "$MANUAL_NODES_FILE"
-        print_success "名称已更新！"
-        echo -e "${CYAN}👉 请运行 [1] 重新生成配置以生效。${PLAIN}"
-    else
-        echo "未修改。"
-    fi
 }
 
-function menu_manage_names() {
-    clear
-    print_title "🏷️  节点名称管理中心"
-    echo -e " 1. 修改 ${YELLOW}本机节点${PLAIN} 前缀 (当前: $(cat "$LOCAL_NAME_FILE" 2>/dev/null || echo "ElJefe"))"
-    echo -e " 2. 修改 ${YELLOW}手动节点${PLAIN} 名称"
-    echo -e " 0. 返回主菜单"
-    echo ""
-    read -p "请输入选项: " nc
-    case "$nc" in
-        1) menu_rename_local; read -p "按回车继续..." ;;
-        2) menu_rename_manual; read -p "按回车继续..." ;;
-        *) return ;;
-    esac
+function menu_clear_data() {
+    echo "" > "$AIRPORT_URLS_FILE"
+    echo "" > "$MANUAL_NODES_FILE"
+    print_success "所有订阅和节点数据已清空。"
 }
-# ---------------------------
+
+function menu_reset_all() {
+    rm -f "$OUTPUT_FILE" "$MANUAL_NODES_FILE" "$AIRPORT_URLS_FILE" "$LOCAL_NAME_FILE"
+    print_success "已重置所有数据。"
+    exit 0
+}
+
+# ===========================================
+# 主菜单
+# ===========================================
 
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.5${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.6${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
     # 计数
@@ -502,17 +508,17 @@ function show_menu() {
     [ -f "$AIRPORT_URLS_FILE" ] && AIR_CNT=$(grep -cve '^\s*$' "$AIRPORT_URLS_FILE")
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
-    # [修复] 放弃使用 printf 的自动补齐功能（因为 Emoji 宽度不一）
-    # 改为手动添加 3 个空格，这样所有图标（占用2字符）后的文字起点一致。
+    # 布局优化：使用 [图标] | 文字 格式，强制对齐
+    # 不依赖 emoji 宽度，依赖 | 的位置
     
-    printf "${GREEN} 1.${PLAIN} %s   %s\n" "🔄" "重新生成配置 (加载所有数据)"
-    printf "${GREEN} 2.${PLAIN} %s   %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️" "添加机场订阅" "$AIR_CNT"
-    printf "${GREEN} 3.${PLAIN} %s   %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
-    printf "${GREEN} 4.${PLAIN} %s   %s\n" "🗑️" "清空数据 (节点/订阅)"
-    printf "${GREEN} 5.${PLAIN} %s   %s\n" "📄" "查看配置文件"
-    printf "${BLUE} 6.${PLAIN} %s   %s\n" "✏️" "重命名节点 (本机/手动)"
-    printf "${RED} 7.${PLAIN} %s   %s\n" "🧹" "重置所有数据 (删库)"
-    printf "${GREEN} 0.${PLAIN} %s   %s\n" "🚪" "退出"
+    printf "${GREEN} 1.${PLAIN} 🔄  | %s\n" "重新生成配置 (加载所有数据)"
+    printf "${GREEN} 2.${PLAIN} ✈️   | %s [当前: ${YELLOW}%s${PLAIN}]\n" "添加机场订阅" "$AIR_CNT"
+    printf "${GREEN} 3.${PLAIN} 🧩  | %s [当前: ${YELLOW}%s${PLAIN}]\n" "手动节点管理 (新增/删除/重命名)" "$MAN_CNT"
+    printf "${GREEN} 4.${PLAIN} 🧹  | %s\n" "清空数据 (订阅+节点)"
+    printf "${GREEN} 5.${PLAIN} 📄  | %s\n" "查看配置文件"
+    printf "${BLUE} 6.${PLAIN} 🏠  | %s\n" "本机节点改名 (Local Node)"
+    printf "${RED} 7.${PLAIN} 🗑️   | %s\n" "重置脚本 (删库跑路)"
+    printf "${GREEN} 0.${PLAIN} 🚪  | %s\n" "退出"
     
     echo -e "${PURPLE}==============================================${PLAIN}"
     echo -e " 📂 输出路径: ${CYAN}${OUTPUT_FILE}${PLAIN}"
@@ -522,11 +528,11 @@ function show_menu() {
     case "$choice" in
         1) run_generator; read -p "按回车继续..." ;;
         2) menu_add_airport; read -p "按回车继续..." ;;
-        3) menu_add_manual; read -p "按回车继续..." ;;
+        3) menu_manual_manager ;; # 进入子菜单
         4) menu_clear_data; read -p "按回车继续..." ;;
         5) echo ""; cat "$OUTPUT_FILE"; echo ""; read -p "按回车继续..." ;;
+        6) menu_rename_local; read -p "按回车继续..." ;; 
         7) menu_reset_all ;;
-        6) menu_manage_names ;; 
         0) exit 0 ;;
         *) echo -e "${RED}无效选项${PLAIN}"; sleep 1 ;;
     esac
@@ -540,26 +546,10 @@ if [ ! -f "$OUTPUT_FILE" ]; then
     clear
     print_title "🚀 欢迎使用 Clash 配置向导 (首次运行)"
     
-    # 引导添加机场
     if [ ! -f "$AIRPORT_URLS_FILE" ]; then touch "$AIRPORT_URLS_FILE"; fi
-    read -p "$(echo -e "${YELLOW}❓ 是否添加机场订阅？[y/n]: ${PLAIN}")" first_air
-    if [[ "$first_air" == "y" || "$first_air" == "Y" ]]; then
-        echo -e "${GREEN}➜ 粘贴地址:${PLAIN}"
-        read -r link
-        [[ -n "$link" ]] && echo "$link" >> "$AIRPORT_URLS_FILE"
-    fi
-
-    # 引导添加手动节点
     if [ ! -f "$MANUAL_NODES_FILE" ]; then touch "$MANUAL_NODES_FILE"; fi
-    read -p "$(echo -e "${YELLOW}❓ 是否添加手动节点？[y/n]: ${PLAIN}")" first_node
-    if [[ "$first_node" == "y" || "$first_node" == "Y" ]]; then
-        echo -e "${GREEN}➜ 粘贴链接:${PLAIN}"
-        read -r link
-        [[ -n "$link" ]] && echo "$link" >> "$MANUAL_NODES_FILE"
-    fi
     
     run_generator
-    
     echo -e "\n${CYAN}👉 提示: 再次运行此脚本即可进入管理维护面板。${PLAIN}"
 else
     while true; do

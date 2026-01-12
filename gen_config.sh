@@ -1,11 +1,17 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.7 - 智能命名版)
+# Clash 配置管理神器 (v13.8 - 修复缩进与乱码版)
 # ==============================================================
 
+# --- 防止中文乱码 ---
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
 # --- 全局配置 ---
+# [重要] 脚本依然会从这里下载模板，请确保 Gist 上的模板是最新的
 TEMPLATE_URL="https://gist.githubusercontent.com/eljefeZZZ/ec1ea2afe5f4e13e9b01e05ddc11170c/raw/clash_template.yaml"
+
 INFO_FILE="/usr/local/eljefe-v2/info.txt"
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 AIRPORT_URLS_FILE="/root/airport_urls.txt"
@@ -39,7 +45,8 @@ function init_env() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告: 未检测到 Python3${PLAIN}"
     fi
-    # Python 解析脚本 (升级：支持自动追加后缀)
+
+    # Python 解析脚本 (修复：增加 2 空格缩进)
     cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 
@@ -50,21 +57,19 @@ def parse_vmess(link, custom_prefix=None):
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
         
-        # 命名逻辑：如果有自定义前缀，则追加 _VMess
         if custom_prefix:
             node_name = f"{custom_prefix}_VMess"
         else:
             node_name = data.get('ps', 'Imported-VMess')
-            
-        return f"""- name: "{node_name}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
+        
+        # [修复] 增加 2 空格缩进
+        return f"""  - name: "{node_name}"\n    type: vmess\n    server: {data.get('add')}\n    port: {data.get('port')}\n    uuid: {data.get('id')}\n    alterId: {data.get('aid', 0)}\n    cipher: {data.get('scy', 'auto')}\n    udp: true\n    tls: {str(data.get('tls', '') == 'tls').lower()}\n    network: {data.get('net', 'tcp')}\n    servername: {data.get('host', '') or data.get('sni', '')}\n    ws-opts:\n      path: {data.get('path', '/')}\n      headers:\n        Host: {data.get('host', '') or data.get('sni', '')}\n"""
     except:
-        # 处理 vmess:// base64 只有参数的情况（旧格式）
         return None
 
 def parse_vless(link, custom_prefix=None):
     if not link.startswith("vless://"): return None
     try:
-        # 1. 预处理链接，提取 fragment 名字
         body = link[8:]
         if "#" in body:
             main_part, original_name = body.split("#", 1)
@@ -72,14 +77,12 @@ def parse_vless(link, custom_prefix=None):
         else:
             main_part, original_name = body, "Imported-VLESS"
             
-        # 2. 解析参数 (为了识别 reality 还是普通 vless)
         if "?" in main_part:
             user_host, query = main_part.split("?", 1)
             params = dict(urllib.parse.parse_qsl(query))
         else:
             user_host, query, params = main_part, "", {}
 
-        # 3. 命名逻辑
         security = params.get("security", "none")
         if custom_prefix:
             if security == "reality":
@@ -89,7 +92,6 @@ def parse_vless(link, custom_prefix=None):
         else:
             node_name = original_name
 
-        # 4. 继续解析核心信息
         if "@" in user_host:
             uuid, host_port = user_host.split("@", 1)
         else:
@@ -114,20 +116,21 @@ def parse_vless(link, custom_prefix=None):
         host = params.get("host", "")
         service_name = params.get("serviceName", "")
 
-        yaml_str = f'- name: "{node_name}"\n  type: vless\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  udp: true\n  tls: {str(security != "none").lower()}\n  network: {type_net}\n'
+        # [修复] 增加 2 空格缩进
+        yaml_str = f'  - name: "{node_name}"\n    type: vless\n    server: {server}\n    port: {port}\n    uuid: {uuid}\n    udp: true\n    tls: {str(security != "none").lower()}\n    network: {type_net}\n'
         
-        if flow: yaml_str += f'  flow: {flow}\n'
-        if sni: yaml_str += f'  servername: {sni}\n'
+        if flow: yaml_str += f'    flow: {flow}\n'
+        if sni: yaml_str += f'    servername: {sni}\n'
         
         if security == "reality":
-            yaml_str += f'  reality-opts:\n    public-key: {pbk}\n    short-id: "{sid}"\n  client-fingerprint: {fp}\n'
+            yaml_str += f'    reality-opts:\n      public-key: {pbk}\n      short-id: "{sid}"\n    client-fingerprint: {fp}\n'
         elif security == "tls":
-            yaml_str += f'  skip-cert-verify: true\n'
+            yaml_str += f'    skip-cert-verify: true\n'
             
         if type_net == "ws":
-             yaml_str += f'  ws-opts:\n    path: {path}\n    headers:\n      Host: {host if host else sni}\n'
+             yaml_str += f'    ws-opts:\n      path: {path}\n      headers:\n        Host: {host if host else sni}\n'
         elif type_net == "grpc":
-             yaml_str += f'  grpc-opts:\n    grpc-service-name: {service_name}\n'
+             yaml_str += f'    grpc-opts:\n      grpc-service-name: {service_name}\n'
         
         return yaml_str
     except Exception as e:
@@ -153,9 +156,13 @@ EOF
 
 function download_template() {
     print_step "正在下载最新模板..."
-    curl -s -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)"
-    if ! grep -q "proxies:" template.tmp; then
-        print_error "模板下载失败"
+    # 增加 -L 参数以支持重定向，增加超时设置
+    curl -s -L -o template.tmp "${TEMPLATE_URL}?t=$(date +%s)" --connect-timeout 10
+    
+    if [ ! -s template.tmp ] || ! grep -q "proxies:" template.tmp; then
+        print_error "模板下载失败或文件内容错误！"
+        print_error "请检查 Gist 链接是否正确或网络是否通畅。"
+        rm -f template.tmp
         exit 1
     else
         print_success "模板已更新"
@@ -220,55 +227,56 @@ function run_generator() {
     if [ -f "$INFO_FILE" ]; then
         source "$INFO_FILE"
         IP=$(curl -s https://api.ipify.org)
+        # [修复] 增加 2 空格缩进
         cat << EOF >> "$AUTO_NODES_TEMP"
-- name: ${LOCAL_PREFIX}_Reality
-  type: vless
-  server: $IP
-  port: $PORT_REALITY
-  uuid: $UUID
-  network: tcp
-  tls: true
-  udp: true
-  flow: xtls-rprx-vision
-  servername: $SNI
-  reality-opts:
-    public-key: $PUB_KEY
-    short-id: "$SID"
-  client-fingerprint: chrome
+  - name: ${LOCAL_PREFIX}_Reality
+    type: vless
+    server: $IP
+    port: $PORT_REALITY
+    uuid: $UUID
+    network: tcp
+    tls: true
+    udp: true
+    flow: xtls-rprx-vision
+    servername: $SNI
+    reality-opts:
+      public-key: $PUB_KEY
+      short-id: "$SID"
+    client-fingerprint: chrome
 
 EOF
         if [[ -n "$DOMAIN" ]]; then
             cat << EOF >> "$AUTO_NODES_TEMP"
-- name: ${LOCAL_PREFIX}_VLESS_CDN
-  type: vless
-  server: $DOMAIN
-  port: $PORT_TLS
-  uuid: $UUID
-  udp: true
-  tls: true
-  network: ws
-  servername: $DOMAIN
-  skip-cert-verify: false
-  ws-opts:
-    path: /vless
-    headers:
-      Host: $DOMAIN
+  - name: ${LOCAL_PREFIX}_VLESS_CDN
+    type: vless
+    server: $DOMAIN
+    port: $PORT_TLS
+    uuid: $UUID
+    udp: true
+    tls: true
+    network: ws
+    servername: $DOMAIN
+    skip-cert-verify: false
+    ws-opts:
+      path: /vless
+      headers:
+        Host: $DOMAIN
 
-- name: ${LOCAL_PREFIX}_VMess_CDN
-  type: vmess
-  server: $DOMAIN
-  port: $PORT_TLS
-  uuid: $UUID
-  alterId: 0
-  cipher: auto
-  udp: true
-  tls: true
-  network: ws
-  servername: $DOMAIN
-  ws-opts:
-    path: /vmess
-    headers:
-      Host: $DOMAIN
+  - name: ${LOCAL_PREFIX}_VMess_CDN
+    type: vmess
+    server: $DOMAIN
+    port: $PORT_TLS
+    uuid: $UUID
+    alterId: 0
+    cipher: auto
+    udp: true
+    tls: true
+    network: ws
+    servername: $DOMAIN
+    ws-opts:
+      path: /vmess
+      headers:
+        Host: $DOMAIN
 
 EOF
         fi
@@ -291,11 +299,15 @@ EOF
             custom_name=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^[ \t]*//')
             
             if [[ "$link_url" == vmess://* || "$link_url" == vless://* ]]; then
-                # 传入的前缀是 custom_name，Python 会自动追加 _VMess 或 _Reality
                 RESULT=$(python3 vmess_parser.py "$link_url" "$custom_name")
                 [[ -n "$RESULT" ]] && echo "$RESULT" >> "$MANUAL_NODES_TEMP" && echo "" >> "$MANUAL_NODES_TEMP"
             else
-                echo "$line" >> "$MANUAL_NODES_TEMP"
+                # [修复] 如果是直接粘贴的 YAML，且没缩进，尝试加缩进
+                if [[ "$line" =~ ^- ]]; then
+                    echo "  $line" >> "$MANUAL_NODES_TEMP"
+                else
+                    echo "$line" >> "$MANUAL_NODES_TEMP"
+                fi
             fi
             
         done < "$MANUAL_NODES_FILE"
@@ -310,7 +322,8 @@ EOF
         if [ -s "$temp_file" ]; then
             while read -r line; do
                 if [[ "$line" =~ ^[[:space:]]*-[[:space:]]name: ]]; then
-                    NAME=$(echo "$line" | awk -F'name: ' '{print $2}' | tr -d '"' | tr -d "'" | sed 's/^[ \t]*//;s/[ \t]*$//')
+                    # 提取节点名称
+                    NAME=$(echo "$line" | sed 's/.*name: //;s/"//g;s/'"'"'//g;s/^[ \t]*//;s/[ \t]*$//')
                     [[ -n "$NAME" ]] && NODE_NAMES="${NODE_NAMES}      - \"${NAME}\"\n"
                 fi
             done < "$temp_file"
@@ -339,8 +352,11 @@ EOF
 }
 
 # ===========================================
-# 菜单功能 (模块化)
+# 菜单功能
 # ===========================================
+# (菜单部分代码保持不变，为节省篇幅略去，请直接保留你原脚本的菜单函数即可)
+# 如果你需要完整的包含菜单的脚本，请告诉我，我再发一次。
+# 下面只保留调用部分
 
 function menu_add_airport() {
     print_title "✈️  添加机场订阅"
@@ -373,7 +389,6 @@ function menu_rename_local() {
     fi
 }
 
-# --- 核心：手动节点管理中心 ---
 function menu_manual_manager() {
     while true; do
         clear
@@ -450,7 +465,6 @@ function menu_manual_manager() {
                     echo -e "${GREEN}➜ 输入新前缀 (自动追加 _VMess/_Reality):${PLAIN}"
                     read -r new_name
                     if [[ -n "$new_name" ]]; then
-                        # 覆盖：只保留纯链接+新前缀
                         lines[$idx]="$pure_link $new_name"
                         printf "%s\n" "${lines[@]}" > "$MANUAL_NODES_FILE"
                         print_success "前缀已更新！生成配置时将自动补全协议后缀。"
@@ -483,14 +497,10 @@ function menu_reset_all() {
     exit 0
 }
 
-# ===========================================
-# 主菜单
-# ===========================================
-
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.7${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.8${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
     AIR_CNT=0; MAN_CNT=0
@@ -524,17 +534,11 @@ function show_menu() {
     esac
 }
 
-# ===========================================
-# 主入口
-# ===========================================
-
 if [ ! -f "$OUTPUT_FILE" ]; then
     clear
     print_title "🚀 欢迎使用 Clash 配置向导 (首次运行)"
-    
     if [ ! -f "$AIRPORT_URLS_FILE" ]; then touch "$AIRPORT_URLS_FILE"; fi
     if [ ! -f "$MANUAL_NODES_FILE" ]; then touch "$MANUAL_NODES_FILE"; fi
-    
     run_generator
     echo -e "\n${CYAN}👉 提示: 再次运行此脚本即可进入管理维护面板。${PLAIN}"
 else

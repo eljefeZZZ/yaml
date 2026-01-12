@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.4 - UI对齐修复版)
+# Clash 配置管理神器 (v13.5 - UI完美对齐版)
 # ==============================================================
 
 # --- 全局配置 ---
@@ -432,7 +432,6 @@ function menu_rename_manual() {
         return
     fi
 
-    # 读取文件到数组
     mapfile -t lines < "$MANUAL_NODES_FILE"
     
     if [ ${#lines[@]} -eq 0 ]; then
@@ -442,16 +441,12 @@ function menu_rename_manual() {
 
     echo -e "${YELLOW}请选择要重命名的节点:${PLAIN}"
     i=0
-    valid_indices=()
     for line in "${lines[@]}"; do
         [[ -z "$line" ]] && continue
-        # 解析展示
         read -r link name <<< "$line"
         if [[ -z "$name" ]]; then name="(默认名称)"; fi
-        # 截取link前20个字符用于展示
         short_link="${link:0:20}..."
         echo -e " [${i}] 名称: ${CYAN}${name}${PLAIN} \t链接: ${short_link}"
-        valid_indices+=($i)
         i=$((i+1))
     done
 
@@ -499,7 +494,7 @@ function menu_manage_names() {
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.4${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.5${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
     # 计数
@@ -507,15 +502,17 @@ function show_menu() {
     [ -f "$AIRPORT_URLS_FILE" ] && AIR_CNT=$(grep -cve '^\s*$' "$AIRPORT_URLS_FILE")
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
-    # [修复] 使用 %-4s 为图标列预留固定宽度，确保对齐
-    printf "${GREEN} 1.${PLAIN}  %-4s %s\n" "🔄" "重新生成配置 (加载所有数据)"
-    printf "${GREEN} 2.${PLAIN}  %-4s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️" "添加机场订阅" "$AIR_CNT"
-    printf "${GREEN} 3.${PLAIN}  %-4s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
-    printf "${GREEN} 4.${PLAIN}  %-4s %s\n" "🗑️" "清空数据 (节点/订阅)"
-    printf "${GREEN} 5.${PLAIN}  %-4s %s\n" "📄" "查看配置文件"
-    printf "${BLUE} 7.${PLAIN}  %-4s %s\n" "✏️" "重命名节点 (本机/手动)"
-    printf "${RED} 6.${PLAIN}  %-4s %s\n" "🧹" "重置所有数据 (删库)"
-    printf "${GREEN} 0.${PLAIN}  %-4s %s\n" "🚪" "退出"
+    # [修复] 放弃使用 printf 的自动补齐功能（因为 Emoji 宽度不一）
+    # 改为手动添加 3 个空格，这样所有图标（占用2字符）后的文字起点一致。
+    
+    printf "${GREEN} 1.${PLAIN} %s   %s\n" "🔄" "重新生成配置 (加载所有数据)"
+    printf "${GREEN} 2.${PLAIN} %s   %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️" "添加机场订阅" "$AIR_CNT"
+    printf "${GREEN} 3.${PLAIN} %s   %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
+    printf "${GREEN} 4.${PLAIN} %s   %s\n" "🗑️" "清空数据 (节点/订阅)"
+    printf "${GREEN} 5.${PLAIN} %s   %s\n" "📄" "查看配置文件"
+    printf "${BLUE} 6.${PLAIN} %s   %s\n" "✏️" "重命名节点 (本机/手动)"
+    printf "${RED} 7.${PLAIN} %s   %s\n" "🧹" "重置所有数据 (删库)"
+    printf "${GREEN} 0.${PLAIN} %s   %s\n" "🚪" "退出"
     
     echo -e "${PURPLE}==============================================${PLAIN}"
     echo -e " 📂 输出路径: ${CYAN}${OUTPUT_FILE}${PLAIN}"
@@ -528,8 +525,8 @@ function show_menu() {
         3) menu_add_manual; read -p "按回车继续..." ;;
         4) menu_clear_data; read -p "按回车继续..." ;;
         5) echo ""; cat "$OUTPUT_FILE"; echo ""; read -p "按回车继续..." ;;
-        6) menu_reset_all ;;
-        7) menu_manage_names ;; 
+        7) menu_reset_all ;;
+        6) menu_manage_names ;; 
         0) exit 0 ;;
         *) echo -e "${RED}无效选项${PLAIN}"; sleep 1 ;;
     esac

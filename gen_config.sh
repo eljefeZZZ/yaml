@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================
-# Clash 配置管理神器 (v13.2 VLESS增强版)
+# Clash 配置管理神器 (v13.4 - 节点命名大师版)
 # ==============================================================
 
 # --- 全局配置 ---
@@ -10,6 +10,7 @@ INFO_FILE="/usr/local/eljefe-v2/info.txt"
 MANUAL_NODES_FILE="/root/manual_nodes.yaml"
 AIRPORT_URLS_FILE="/root/airport_urls.txt"
 OUTPUT_FILE="/root/clash_final.yaml"
+LOCAL_NAME_FILE="/root/local_node_name.txt" # 新增：存储本机节点名称配置
 PORT_REALITY=443
 PORT_TLS=8443
 
@@ -30,7 +31,7 @@ function print_success() { echo -e "${GREEN}✔  $1${PLAIN}"; }
 function print_error() { echo -e "${RED}✖  $1${PLAIN}"; }
 
 # ===========================================
-# 核心功能模块 (封装)
+# 核心功能模块
 # ===========================================
 
 function init_env() {
@@ -38,17 +39,18 @@ function init_env() {
     if ! command -v python3 &> /dev/null; then
         echo -e "${YELLOW}⚠️  警告: 未检测到 Python3${PLAIN}"
     fi
-    # 注意：这里嵌入了升级版的 Python 脚本，支持 VMess 和 VLESS
+    # Python 解析脚本 (支持自定义名称传参)
     cat << 'EOF' > vmess_parser.py
 import sys, base64, json, urllib.parse
 
-def parse_vmess(link):
+def parse_vmess(link, custom_name=None):
     if not link.startswith("vmess://"): return None
     b64_body = link[8:]
     try:
         decoded = base64.b64decode(b64_body).decode('utf-8')
         data = json.loads(decoded)
-        return f"""- name: "{data.get('ps', 'Imported-VMess')}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
+        node_name = custom_name if custom_name else data.get('ps', 'Imported-VMess')
+        return f"""- name: "{node_name}"\n  type: vmess\n  server: {data.get('add')}\n  port: {data.get('port')}\n  uuid: {data.get('id')}\n  alterId: {data.get('aid', 0)}\n  cipher: {data.get('scy', 'auto')}\n  udp: true\n  tls: {str(data.get('tls', '') == 'tls').lower()}\n  network: {data.get('net', 'tcp')}\n  servername: {data.get('host', '') or data.get('sni', '')}\n  ws-opts:\n    path: {data.get('path', '/')}\n    headers:\n      Host: {data.get('host', '') or data.get('sni', '')}\n"""
     except:
         try:
             if "?" in b64_body: b64, query = b64_body.split("?", 1)
@@ -60,7 +62,7 @@ def parse_vmess(link):
             uuid = user_info.split(':')[1]
             server, port = host_info.split(':')
             params = dict(urllib.parse.parse_qsl(query))
-            name = params.get('remarks', 'Imported-VMess')
+            name = custom_name if custom_name else params.get('remarks', 'Imported-VMess')
             net = params.get('obfs', 'tcp')
             if net == 'websocket': net = 'ws'
             tls = 'true' if params.get('tls') == '1' else 'false'
@@ -69,33 +71,31 @@ def parse_vmess(link):
             return f"""- name: "{name}"\n  type: vmess\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  alterId: {params.get('alterId', 0)}\n  cipher: auto\n  udp: true\n  tls: {tls}\n  network: {net}\n  servername: {host}\n  ws-opts:\n    path: {path}\n    headers:\n      Host: {host}\n"""
         except: return None
 
-def parse_vless(link):
+def parse_vless(link, custom_name=None):
     if not link.startswith("vless://"): return None
     try:
-        # 1. 分离 fragment (节点名称)
         body = link[8:]
         if "#" in body:
-            main_part, name = body.split("#", 1)
-            name = urllib.parse.unquote(name).strip()
+            main_part, original_name = body.split("#", 1)
+            original_name = urllib.parse.unquote(original_name).strip()
         else:
-            main_part, name = body, "Imported-VLESS"
+            main_part, original_name = body, "Imported-VLESS"
+        
+        name = custom_name if custom_name else original_name
             
-        # 2. 分离 query 参数
         if "?" in main_part:
             user_host, query = main_part.split("?", 1)
             params = dict(urllib.parse.parse_qsl(query))
         else:
             user_host, query, params = main_part, "", {}
 
-        # 3. 分离 UUID 和 Host:Port
         if "@" in user_host:
             uuid, host_port = user_host.split("@", 1)
         else:
             return None 
 
-        # 4. 分离 IP 和 端口 (处理 IPv6)
         if ":" in host_port:
-            if "]:" in host_port: # IPv6 like [::1]:443
+            if "]:" in host_port:
                 server, port = host_port.rsplit(":", 1)
                 server = server.replace("[", "").replace("]", "")
             else:
@@ -103,31 +103,27 @@ def parse_vless(link):
         else:
             return None
 
-        # 5. 提取参数
         type_net = params.get("type", "tcp")
         security = params.get("security", "none")
         flow = params.get("flow", "")
         sni = params.get("sni", "")
-        pbk = params.get("pbk", "") # Reality public key
-        sid = params.get("sid", "") # Reality short id
+        pbk = params.get("pbk", "")
+        sid = params.get("sid", "")
         fp = params.get("fp", "chrome")
         path = params.get("path", "/")
         host = params.get("host", "")
-        service_name = params.get("serviceName", "") # For grpc
+        service_name = params.get("serviceName", "")
 
-        # 6. 构建 YAML
         yaml_str = f'- name: "{name}"\n  type: vless\n  server: {server}\n  port: {port}\n  uuid: {uuid}\n  udp: true\n  tls: {str(security != "none").lower()}\n  network: {type_net}\n'
         
         if flow: yaml_str += f'  flow: {flow}\n'
         if sni: yaml_str += f'  servername: {sni}\n'
         
-        # Reality / TLS 特有配置
         if security == "reality":
             yaml_str += f'  reality-opts:\n    public-key: {pbk}\n    short-id: "{sid}"\n  client-fingerprint: {fp}\n'
         elif security == "tls":
             yaml_str += f'  skip-cert-verify: true\n'
             
-        # 传输层配置
         if type_net == "ws":
              yaml_str += f'  ws-opts:\n    path: {path}\n    headers:\n      Host: {host if host else sni}\n'
         elif type_net == "grpc":
@@ -140,11 +136,16 @@ def parse_vless(link):
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         link = sys.argv[1].strip()
+        custom_name = None
+        if len(sys.argv) > 2:
+            arg2 = sys.argv[2].strip()
+            if arg2: custom_name = arg2
+
         res = None
         if link.startswith("vmess://"):
-            res = parse_vmess(link)
+            res = parse_vmess(link, custom_name)
         elif link.startswith("vless://"):
-            res = parse_vless(link)
+            res = parse_vless(link, custom_name)
         
         if res: print(res)
 EOF
@@ -209,11 +210,20 @@ function run_generator() {
     print_title "🏠 本机节点生成"
     AUTO_NODES_TEMP="auto_nodes.tmp"
     echo "" > "$AUTO_NODES_TEMP"
+    
+    # --- 获取本机节点自定义名称前缀 ---
+    LOCAL_PREFIX="ElJefe"
+    if [ -f "$LOCAL_NAME_FILE" ]; then
+        READ_NAME=$(cat "$LOCAL_NAME_FILE" | tr -d '\n')
+        [[ -n "$READ_NAME" ]] && LOCAL_PREFIX="$READ_NAME"
+    fi
+    # -------------------------------
+
     if [ -f "$INFO_FILE" ]; then
         source "$INFO_FILE"
         IP=$(curl -s https://api.ipify.org)
         cat << EOF >> "$AUTO_NODES_TEMP"
-- name: ElJefe_Reality
+- name: ${LOCAL_PREFIX}_Reality
   type: vless
   server: $IP
   port: $PORT_REALITY
@@ -231,7 +241,7 @@ function run_generator() {
 EOF
         if [[ -n "$DOMAIN" ]]; then
             cat << EOF >> "$AUTO_NODES_TEMP"
-- name: ElJefe_VLESS_CDN
+- name: ${LOCAL_PREFIX}_VLESS_CDN
   type: vless
   server: $DOMAIN
   port: $PORT_TLS
@@ -246,7 +256,7 @@ EOF
     headers:
       Host: $DOMAIN
 
-- name: ElJefe_VMess_CDN
+- name: ${LOCAL_PREFIX}_VMess_CDN
   type: vmess
   server: $DOMAIN
   port: $PORT_TLS
@@ -264,7 +274,7 @@ EOF
 
 EOF
         fi
-        print_success "本机节点已生成"
+        print_success "本机节点已生成 (前缀: ${LOCAL_PREFIX})"
     else
         echo -e "${YELLOW}⚠️  未找到本机配置${PLAIN}"
     fi
@@ -278,13 +288,16 @@ EOF
         while read -r line; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^#.*$ ]] && continue
-            # 修改点：增加了对 vless:// 的判断
-            if [[ "$line" == vmess://* || "$line" == vless://* ]]; then
-                RESULT=$(python3 vmess_parser.py "$line")
+            
+            read -r link_url custom_name <<< "$line"
+            
+            if [[ "$link_url" == vmess://* || "$link_url" == vless://* ]]; then
+                RESULT=$(python3 vmess_parser.py "$link_url" "$custom_name")
                 [[ -n "$RESULT" ]] && echo "$RESULT" >> "$MANUAL_NODES_TEMP" && echo "" >> "$MANUAL_NODES_TEMP"
             else
                 echo "$line" >> "$MANUAL_NODES_TEMP"
             fi
+            
         done < "$MANUAL_NODES_FILE"
         print_success "处理完成"
     else
@@ -346,12 +359,23 @@ function menu_add_airport() {
 function menu_add_manual() {
     echo ""
     print_title "➕ 添加手动节点"
-    echo -e "${GREEN}➜ 粘贴链接 (vmess://... 或 vless://...):${PLAIN}"
+    echo -e "${GREEN}1. 粘贴链接 (vmess://... 或 vless://...):${PLAIN}"
     read -r link
+    
     if [[ -n "$link" ]]; then
+        echo -e "${GREEN}2. 给节点起个名字 (留空则使用默认):${PLAIN}"
+        read -r node_name
+        
         [ ! -f "$MANUAL_NODES_FILE" ] && touch "$MANUAL_NODES_FILE"
-        echo "$link" >> "$MANUAL_NODES_FILE"
-        print_success "节点已保存，运行 [1] 生效。"
+        
+        if [[ -n "$node_name" ]]; then
+            echo "$link $node_name" >> "$MANUAL_NODES_FILE"
+            print_success "节点 [$node_name] 已保存！"
+        else
+            echo "$link" >> "$MANUAL_NODES_FILE"
+            print_success "节点已保存（使用默认名）。"
+        fi
+        echo -e "${CYAN}👉 记得运行选项 [1] 重新生成配置生效。${PLAIN}"
     else
         print_error "输入为空"
     fi
@@ -375,16 +399,112 @@ function menu_reset_all() {
     echo ""
     read -p "$(echo -e "${RED}⚠️  删除所有配置？[y/n]: ${PLAIN}")" confirm
     if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        rm -f "$OUTPUT_FILE" "$MANUAL_NODES_FILE" "$AIRPORT_URLS_FILE"
+        rm -f "$OUTPUT_FILE" "$MANUAL_NODES_FILE" "$AIRPORT_URLS_FILE" "$LOCAL_NAME_FILE"
         print_success "已重置。"
         exit 0
     fi
 }
 
+# --- 新增：节点重命名管理 ---
+function menu_rename_local() {
+    print_title "🏠 重命名本机节点"
+    CUR_NAME="ElJefe"
+    [ -f "$LOCAL_NAME_FILE" ] && CUR_NAME=$(cat "$LOCAL_NAME_FILE")
+    
+    echo -e "当前本机节点前缀: ${YELLOW}${CUR_NAME}${PLAIN}"
+    echo -e "生成后效果: ${CUR_NAME}_Reality / ${CUR_NAME}_CDN"
+    echo ""
+    echo -e "${GREEN}➜ 请输入新的节点前缀 (例如 US_Node):${PLAIN}"
+    read -r new_name
+    if [[ -n "$new_name" ]]; then
+        echo "$new_name" > "$LOCAL_NAME_FILE"
+        print_success "已修改为: $new_name"
+        echo -e "${CYAN}👉 请运行 [1] 重新生成配置以生效。${PLAIN}"
+    else
+        echo "未修改。"
+    fi
+}
+
+function menu_rename_manual() {
+    print_title "✏️  重命名手动节点"
+    if [ ! -s "$MANUAL_NODES_FILE" ]; then
+        print_error "没有找到手动节点文件。"
+        return
+    fi
+
+    # 读取文件到数组
+    mapfile -t lines < "$MANUAL_NODES_FILE"
+    
+    if [ ${#lines[@]} -eq 0 ]; then
+         print_error "节点列表为空。"
+         return
+    fi
+
+    echo -e "${YELLOW}请选择要重命名的节点:${PLAIN}"
+    i=0
+    valid_indices=()
+    for line in "${lines[@]}"; do
+        [[ -z "$line" ]] && continue
+        # 解析展示
+        read -r link name <<< "$line"
+        if [[ -z "$name" ]]; then name="(默认名称)"; fi
+        # 截取link前20个字符用于展示
+        short_link="${link:0:20}..."
+        echo -e " [${i}] 名称: ${CYAN}${name}${PLAIN} \t链接: ${short_link}"
+        valid_indices+=($i)
+        i=$((i+1))
+    done
+
+    echo ""
+    read -p "请输入序号 (0-$((i-1))): " choice
+    
+    # 验证输入是否为数字且在范围内
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -ge "$i" ]; then
+        print_error "无效序号"
+        return
+    fi
+
+    # 获取选中的行
+    selected_line="${lines[$choice]}"
+    read -r link old_name <<< "$selected_line"
+    
+    echo -e "当前名称: ${YELLOW}${old_name:-默认}${PLAIN}"
+    echo -e "${GREEN}➜ 请输入新名称 (不要包含空格):${PLAIN}"
+    read -r new_input_name
+    
+    if [[ -n "$new_input_name" ]]; then
+        # 替换数组中的行
+        lines[$choice]="$link $new_input_name"
+        
+        # 重新写入文件
+        printf "%s\n" "${lines[@]}" > "$MANUAL_NODES_FILE"
+        print_success "名称已更新！"
+        echo -e "${CYAN}👉 请运行 [1] 重新生成配置以生效。${PLAIN}"
+    else
+        echo "未修改。"
+    fi
+}
+
+function menu_manage_names() {
+    clear
+    print_title "🏷️  节点名称管理中心"
+    echo -e " 1. 修改 ${YELLOW}本机节点${PLAIN} 前缀 (当前: $(cat "$LOCAL_NAME_FILE" 2>/dev/null || echo "ElJefe"))"
+    echo -e " 2. 修改 ${YELLOW}手动节点${PLAIN} 名称"
+    echo -e " 0. 返回主菜单"
+    echo ""
+    read -p "请输入选项: " nc
+    case "$nc" in
+        1) menu_rename_local; read -p "按回车继续..." ;;
+        2) menu_rename_manual; read -p "按回车继续..." ;;
+        *) return ;;
+    esac
+}
+# ---------------------------
+
 function show_menu() {
     clear
     echo -e "${PURPLE}==============================================${PLAIN}"
-    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.2${PLAIN}"
+    echo -e "${BOLD}   Clash 配置管理面板 ${PLAIN}${CYAN}v13.4${PLAIN}"
     echo -e "${PURPLE}==============================================${PLAIN}"
     
     # 计数
@@ -392,19 +512,19 @@ function show_menu() {
     [ -f "$AIRPORT_URLS_FILE" ] && AIR_CNT=$(grep -cve '^\s*$' "$AIRPORT_URLS_FILE")
     [ -f "$MANUAL_NODES_FILE" ] && MAN_CNT=$(grep -cve '^\s*$' "$MANUAL_NODES_FILE")
 
-    # [对齐] 使用 printf 格式化输出
     printf "${GREEN} 1.${PLAIN} %-1s %s\n" "🔄" "重新生成配置 (加载所有数据)"
     printf "${GREEN} 2.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "✈️ " "添加机场订阅" "$AIR_CNT"
     printf "${GREEN} 3.${PLAIN} %-1s %s [当前: ${YELLOW}%s${PLAIN}]\n" "➕" "添加手动节点" "$MAN_CNT"
     printf "${GREEN} 4.${PLAIN} %-1s %s\n" "🗑️ " "清空数据 (节点/订阅)"
     printf "${GREEN} 5.${PLAIN} %-1s %s\n" "📄" "查看配置文件"
+    printf "${BLUE} 7.${PLAIN} %-1s %s\n" "✏️ " "重命名节点 (本机/手动)"
     printf "${RED} 6.${PLAIN} %-1s %s\n" "🧹" "重置所有数据 (删库)"
     printf "${GREEN} 0.${PLAIN} %-1s %s\n" "🚪" "退出"
     
     echo -e "${PURPLE}==============================================${PLAIN}"
     echo -e " 📂 输出路径: ${CYAN}${OUTPUT_FILE}${PLAIN}"
     echo ""
-    read -p " 请输入选项 [0-6]: " choice
+    read -p " 请输入选项 [0-7]: " choice
     
     case "$choice" in
         1) run_generator; read -p "按回车继续..." ;;
@@ -413,6 +533,7 @@ function show_menu() {
         4) menu_clear_data; read -p "按回车继续..." ;;
         5) echo ""; cat "$OUTPUT_FILE"; echo ""; read -p "按回车继续..." ;;
         6) menu_reset_all ;;
+        7) menu_manage_names ;; 
         0) exit 0 ;;
         *) echo -e "${RED}无效选项${PLAIN}"; sleep 1 ;;
     esac
